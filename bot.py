@@ -178,38 +178,70 @@ def save_to_sheet(date_str, event, original_text):
 # ──────────────────────────────────────
 
 def transcribe_audio(file_path):
-    """Use Gemini 2.5 Flash to transcribe Khmer audio."""
+    """Use Gemini to transcribe Khmer audio with retry & fallback."""
+    import time
+
+    # Fallback models (បើមួយ busy ប្តូរទៅមួយផ្សេង)
+    models_to_try = [
+        "gemini-flash-latest",
+        "gemini-2.0-flash",
+        "gemini-flash-lite-latest",
+        "gemini-2.5-flash-lite",
+    ]
+
+    prompt = (
+        "សូមស្តាប់សំឡេងនេះ ហើយបំលែងទៅជាអក្សរខ្មែរ។ "
+        "សូមឆ្លើយតែអក្សរខ្មែរប៉ុណ្ណោះ គ្មានការពន្យល់អ្វីទេ។ "
+        "Please transcribe this Khmer audio to Khmer text. "
+        "Return ONLY the Khmer text, no explanation, no translation."
+    )
+
     try:
         logger.info(f"Reading audio file: {file_path}")
-
-        # Read audio file as bytes
         with open(file_path, "rb") as f:
             audio_bytes = f.read()
-
-        prompt = (
-            "សូមស្តាប់សំឡេងនេះ ហើយបំលែងទៅជាអក្សរខ្មែរ។ "
-            "សូមឆ្លើយតែអក្សរខ្មែរប៉ុណ្ណោះ គ្មានការពន្យល់អ្វីទេ។ "
-            "Please transcribe this Khmer audio to Khmer text. "
-            "Return ONLY the Khmer text, no explanation, no translation."
-        )
-
-        response = gemini_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                prompt,
-                types.Part.from_bytes(
-                    data=audio_bytes,
-                    mime_type="audio/ogg",
-                ),
-            ],
-        )
-
-        text = response.text.strip()
-        logger.info(f"Transcribed: {text}")
-        return text
     except Exception as e:
-        logger.error(f"Transcription error: {e}")
+        logger.error(f"Cannot read audio: {e}")
         return None
+
+    # ព្យាយាមជាមួយ Model នីមួយៗ
+    for model_name in models_to_try:
+        # Retry 3 ដងក្នុង Model នីមួយៗ
+        for attempt in range(3):
+            try:
+                logger.info(f"Trying {model_name} (attempt {attempt + 1})...")
+                response = gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        prompt,
+                        types.Part.from_bytes(
+                            data=audio_bytes,
+                            mime_type="audio/ogg",
+                        ),
+                    ],
+                )
+                text = response.text.strip()
+                logger.info(f"✅ Success with {model_name}: {text}")
+                return text
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.warning(f"❌ {model_name} attempt {attempt + 1}: {error_msg[:100]}")
+
+                # បើ 503 (busy) → រង់ចាំ 2 វិនាទី រួច retry
+                if "503" in error_msg or "UNAVAILABLE" in error_msg:
+                    time.sleep(2)
+                    continue
+                # បើ 429 (rate limit) → រង់ចាំ 5 វិនាទី
+                elif "429" in error_msg:
+                    time.sleep(5)
+                    continue
+                # Error ផ្សេងៗ → ប្តូរ Model
+                else:
+                    break
+
+    logger.error("All models failed")
+    return None
 
 
 # ──────────────────────────────────────
