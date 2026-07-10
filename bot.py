@@ -111,13 +111,26 @@ def khmer_to_arabic(text):
 
 
 def parse_khmer_date(text):
+    """
+    Parse Khmer date from text - Enhanced version.
+    Supports:
+    - ថ្ងៃនេះ, ថ្ងៃស្អែក, ម្សិលមិញ, ខានស្អែក
+    - ថ្ងៃច័ន្ទ, ថ្ងៃអង្គារ, ...
+    - ថ្ងៃទី ១៥ ខែ កក្កដា ឆ្នាំ ២០២៦
+    - ថ្ងៃ ១៥ កក្កដា ២០២៦
+    - ១៥ កក្កដា ២០២៦
+    - 15/7/2026, 15-7-2026
+    - ទី១៥ កក្កដា
+    """
     today = datetime.now(TZ)
     normalized = khmer_to_arabic(text)
 
+    # 1. Relative days (ថ្ងៃនេះ, ថ្ងៃស្អែក, ...)
     for keyword, delta in KHMER_RELATIVE_DAYS.items():
         if keyword in text:
             return (today + timedelta(days=delta)).strftime("%Y-%m-%d")
 
+    # 2. Weekdays (ថ្ងៃច័ន្ទ, ថ្ងៃអង្គារ, ...)
     for keyword, weekday in KHMER_WEEKDAYS.items():
         if keyword in text:
             current = today.weekday()
@@ -126,19 +139,10 @@ def parse_khmer_date(text):
                 diff += 7
             return (today + timedelta(days=diff)).strftime("%Y-%m-%d")
 
-    for month_name, month_num in KHMER_MONTHS.items():
-        pattern = rf"ថ្ងៃទី\s*(\d{{1,2}})\s*ខែ\s*{month_name}"
-        match = re.search(pattern, normalized)
-        if match:
-            day = int(match.group(1))
-            year_match = re.search(r"ឆ្នាំ\s*(\d{4})", normalized)
-            year = int(year_match.group(1)) if year_match else today.year
-            try:
-                return datetime(year, month_num, day).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-    date_pattern = re.search(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", normalized)
+    # 3. DD/MM/YYYY ឬ DD-MM-YYYY (ពិនិត្យមុនគេ)
+    date_pattern = re.search(
+        r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", normalized
+    )
     if date_pattern:
         day = int(date_pattern.group(1))
         month = int(date_pattern.group(2))
@@ -150,6 +154,89 @@ def parse_khmer_date(text):
         except ValueError:
             pass
 
+    # 4. រកឃ្លាដែលមានឈ្មោះខែខ្មែរ (Enhanced patterns)
+    for month_name, month_num in KHMER_MONTHS.items():
+        # Pattern A: "ថ្ងៃទី DD ខែ MM ឆ្នាំ YYYY"
+        pattern_a = rf"ថ្ងៃទី\s*(\d{{1,2}})\s*ខែ\s*{month_name}"
+        match = re.search(pattern_a, normalized)
+        if match:
+            day = int(match.group(1))
+            year_match = re.search(r"ឆ្នាំ\s*(\d{4})", normalized)
+            year = int(year_match.group(1)) if year_match else today.year
+            try:
+                return datetime(year, month_num, day).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Pattern B: "ថ្ងៃ DD MM YYYY" (គ្មាន "ខែ", គ្មាន "ទី")
+        pattern_b = rf"ថ្ងៃ\s*(\d{{1,2}})\s*{month_name}"
+        match = re.search(pattern_b, normalized)
+        if match:
+            day = int(match.group(1))
+            # Search year anywhere
+            year_match = re.search(rf"{month_name}\s*(\d{{4}})", normalized)
+            if not year_match:
+                year_match = re.search(r"ឆ្នាំ\s*(\d{4})", normalized)
+            year = int(year_match.group(1)) if year_match else today.year
+            try:
+                return datetime(year, month_num, day).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Pattern C: "ទី DD MM" ឬ "ទី៥ កក្កដា"
+        pattern_c = rf"ទី\s*(\d{{1,2}})\s*{month_name}"
+        match = re.search(pattern_c, normalized)
+        if match:
+            day = int(match.group(1))
+            year_match = re.search(rf"{month_name}\s*(\d{{4}})", normalized)
+            year = int(year_match.group(1)) if year_match else today.year
+            try:
+                return datetime(year, month_num, day).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Pattern D: "DD MM YYYY" (លេខ + ខែ + ឆ្នាំ)
+        pattern_d = rf"(\d{{1,2}})\s*{month_name}\s*(\d{{4}})"
+        match = re.search(pattern_d, normalized)
+        if match:
+            day = int(match.group(1))
+            year = int(match.group(2))
+            try:
+                return datetime(year, month_num, day).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Pattern E: "DD MM" (លេខ + ខែ, គ្មានឆ្នាំ - យកឆ្នាំបច្ចុប្បន្ន)
+        pattern_e = rf"(\d{{1,2}})\s*{month_name}"
+        match = re.search(pattern_e, normalized)
+        if match:
+            day = int(match.group(1))
+            year = today.year
+            try:
+                target = datetime(year, month_num, day)
+                # បើកាលបរិច្ឆេទបានកន្លងទៅហើយ → យកឆ្នាំក្រោយ
+                if target.date() < today.date():
+                    target = datetime(year + 1, month_num, day)
+                return target.strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Pattern F: "MM DD" (ខែ + លេខ)
+        pattern_f = rf"{month_name}\s*(\d{{1,2}})"
+        match = re.search(pattern_f, normalized)
+        if match:
+            day = int(match.group(1))
+            year_match = re.search(r"(\d{4})", normalized)
+            year = int(year_match.group(1)) if year_match else today.year
+            try:
+                target = datetime(year, month_num, day)
+                if not year_match and target.date() < today.date():
+                    target = datetime(year + 1, month_num, day)
+                return target.strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+    # Fallback: today
     return today.strftime("%Y-%m-%d")
 
 
