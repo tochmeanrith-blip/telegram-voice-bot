@@ -3,6 +3,7 @@ import re
 import json
 import asyncio
 import logging
+import threading
 from datetime import datetime, timedelta
 
 import assemblyai as aai
@@ -16,12 +17,14 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+from flask import Flask
 
 # ─── Load Environment Variables ───
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
+PORT = int(os.environ.get("PORT", 10000))
 
 # ─── Logging ───
 logging.basicConfig(
@@ -46,7 +49,6 @@ gc = gspread.authorize(creds)
 spreadsheet = gc.open_by_key(GOOGLE_SHEET_ID)
 worksheet = spreadsheet.sheet1
 
-# Setup headers
 try:
     if not worksheet.row_values(1):
         worksheet.update("A1:E1", [[
@@ -157,10 +159,6 @@ def extract_event(text):
     return event if event else text
 
 
-# ──────────────────────────────────────
-# Save to Google Sheet
-# ──────────────────────────────────────
-
 def save_to_sheet(date_str, event, original_text):
     now = datetime.now()
     time_str = now.strftime("%H:%M:%S")
@@ -171,10 +169,6 @@ def save_to_sheet(date_str, event, original_text):
     logger.info(f"Saved: {new_row}")
     return row_num
 
-
-# ──────────────────────────────────────
-# Speech-to-Text (AssemblyAI)
-# ──────────────────────────────────────
 
 def transcribe_audio(file_path):
     config = aai.TranscriptionConfig(language_code="km")
@@ -285,11 +279,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────
-# Main
+# Flask Web Server (ដើម្បីបំពេញ Port requirement)
 # ──────────────────────────────────────
 
-def main():
-    logger.info("Starting bot...")
+flask_app = Flask(__name__)
+
+
+@flask_app.route("/")
+def home():
+    return "🤖 Telegram Bot is running!"
+
+
+@flask_app.route("/health")
+def health():
+    return {"status": "ok", "bot": "running"}
+
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=PORT)
+
+
+# ──────────────────────────────────────
+# Run Telegram Bot
+# ──────────────────────────────────────
+
+def run_bot():
+    logger.info("Starting Telegram bot...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("history", history_command))
@@ -303,5 +318,15 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 
+# ──────────────────────────────────────
+# Main
+# ──────────────────────────────────────
+
 if __name__ == "__main__":
-    main()
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Flask web server started on port {PORT}")
+
+    # Run Telegram bot in main thread
+    run_bot()
