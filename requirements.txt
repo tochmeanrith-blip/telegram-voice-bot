@@ -3,3 +3,4 @@ assemblyai==0.35.1
 gspread==6.1.4
 google-auth==2.35.0
 python-dotenv==1.0.1
+flask==3.0.3
