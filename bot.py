@@ -295,23 +295,43 @@ def extract_from_image(file_path):
 
 
 # ══════════════════════════════════════
-# 🎨 GENERATE WEEKLY CALENDAR IMAGE
+# 🎨 GENERATE WEEKLY CALENDAR IMAGE (V2)
 # ══════════════════════════════════════
 
+def wrap_text(text, font, max_width, draw):
+    """បំបែកអត្ថបទចុះបន្ទាត់ស្វ័យប្រវត្តិ"""
+    lines = []
+    words = list(text)  # split by character (សម្រាប់ខ្មែរ)
+
+    current_line = ""
+    for char in words:
+        test_line = current_line + char
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        w = bbox[2] - bbox[0]
+        if w <= max_width:
+            current_line = test_line
+        else:
+            if current_line:
+                lines.append(current_line)
+            current_line = char
+
+    if current_line:
+        lines.append(current_line)
+
+    return lines
+
+
 def generate_week_calendar(start_date=None):
-    """បង្កើតរូបភាព Calendar សម្រាប់សប្តាហ៍មួយ"""
+    """បង្កើតរូបភាព Calendar សម្រាប់សប្តាហ៍មួយ - V2 (Full Description)"""
 
     # Setup
     if start_date is None:
         today = datetime.now(TZ).date()
-        # រក Monday នៃសប្តាហ៍
-        start_date = today + timedelta(days=(7 - today.weekday()) % 7)
-        if today.weekday() != 4:  # មិនមែនថ្ងៃសុក្រ
-            start_date = today - timedelta(days=today.weekday())
+        start_date = today - timedelta(days=today.weekday())
 
     week_dates = [start_date + timedelta(days=i) for i in range(7)]
 
-    # Get events for this week
+    # Get events
     all_events = get_all_events()
     events_by_date = defaultdict(list)
     for e in all_events:
@@ -322,16 +342,60 @@ def generate_week_calendar(start_date=None):
         except Exception:
             pass
 
-    # Image settings
-    WIDTH = 1400
-    HEIGHT = 900
-    HEADER_H = 120
-    DAY_HEADER_H = 80
-    COL_W = WIDTH // 7
+    # ═══ Load fonts ═══
+    font_path = get_khmer_font()
+    try:
+        font_title = ImageFont.truetype(font_path, 38) if font_path else ImageFont.load_default()
+        font_subtitle = ImageFont.truetype(font_path, 24) if font_path else ImageFont.load_default()
+        font_date = ImageFont.truetype(font_path, 32) if font_path else ImageFont.load_default()
+        font_day = ImageFont.truetype(font_path, 20) if font_path else ImageFont.load_default()
+        font_event = ImageFont.truetype(font_path, 17) if font_path else ImageFont.load_default()
+        font_id = ImageFont.truetype(font_path, 13) if font_path else ImageFont.load_default()
+        font_small = ImageFont.truetype(font_path, 14) if font_path else ImageFont.load_default()
+    except Exception:
+        font_title = font_subtitle = font_date = font_day = font_event = font_id = font_small = ImageFont.load_default()
 
-    # Colors
+    # ═══ Image dimensions ═══
+    WIDTH = 1800  # ធំជាងមុន
+    HEADER_H = 130
+    DAY_HEADER_H = 110
+    COL_W = WIDTH // 7
+    EVENT_PADDING = 10
+    EVENT_LINE_HEIGHT = 22
+    EVENT_MIN_HEIGHT = 55
+    EVENT_GAP = 8
+
+    # ═══ Calculate needed height ═══
+    # ស្វែងរកកម្ពស់អតិបរមាដែលត្រូវការសម្រាប់ថ្ងៃដែលមាន events ច្រើនបំផុត
+    max_content_h = 0
+
+    # Temporary draw for text measurement
+    temp_img = Image.new("RGB", (100, 100))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    day_heights = {}
+    for d in week_dates:
+        events = events_by_date[d]
+        total_h = 0
+        for e in events:
+            event_text = e['event']
+            text_max_w = COL_W - (EVENT_PADDING * 2) - 20
+            lines = wrap_text(event_text, font_event, text_max_w, temp_draw)
+            # ID line + content lines + padding
+            box_h = 25 + (len(lines) * EVENT_LINE_HEIGHT) + 15
+            total_h += max(box_h, EVENT_MIN_HEIGHT) + EVENT_GAP
+        day_heights[d] = total_h
+        if total_h > max_content_h:
+            max_content_h = total_h
+
+    # ═══ Total image height ═══
+    CONTENT_H = max(max_content_h + 30, 500)  # យ៉ាងតិច 500px
+    FOOTER_H = 40
+    HEIGHT = HEADER_H + DAY_HEADER_H + CONTENT_H + FOOTER_H
+
+    # ═══ Colors ═══
     BG = (245, 247, 250)
-    HEADER_BG = (66, 133, 244)  # Google Blue
+    HEADER_BG = (66, 133, 244)
     WEEKEND_BG = (255, 243, 224)
     TODAY_BG = (232, 240, 254)
     BORDER = (218, 220, 224)
@@ -339,53 +403,42 @@ def generate_week_calendar(start_date=None):
     TEXT_GRAY = (95, 99, 104)
     TEXT_WHITE = (255, 255, 255)
     EVENT_COLORS = [
-        (52, 168, 83),   # Green
-        (251, 188, 5),   # Yellow
-        (234, 67, 53),   # Red
-        (156, 39, 176),  # Purple
-        (0, 172, 193),   # Cyan
+        (52, 168, 83),
+        (251, 188, 5),
+        (234, 67, 53),
+        (156, 39, 176),
+        (0, 172, 193),
+        (255, 112, 67),
     ]
 
-    # Create image
+    # ═══ Create image ═══
     img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(img)
 
-    # Load fonts
-    font_path = get_khmer_font()
-    try:
-        font_title = ImageFont.truetype(font_path, 36) if font_path else ImageFont.load_default()
-        font_date = ImageFont.truetype(font_path, 28) if font_path else ImageFont.load_default()
-        font_day = ImageFont.truetype(font_path, 20) if font_path else ImageFont.load_default()
-        font_event = ImageFont.truetype(font_path, 16) if font_path else ImageFont.load_default()
-        font_small = ImageFont.truetype(font_path, 14) if font_path else ImageFont.load_default()
-    except Exception:
-        font_title = font_date = font_day = font_event = font_small = ImageFont.load_default()
-
-    # Header
+    # ═══ Header ═══
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=HEADER_BG)
     end_date = start_date + timedelta(days=6)
-    title = f"📅 កាលវិភាគសប្តាហ៍"
+    title = "📅 កាលវិភាគសប្តាហ៍"
     subtitle = (f"{start_date.day} {KHMER_MONTHS_NAMES[start_date.month]} - "
                 f"{end_date.day} {KHMER_MONTHS_NAMES[end_date.month]} "
                 f"{end_date.year}")
 
     draw.text((30, 25), title, font=font_title, fill=TEXT_WHITE)
-    draw.text((30, 75), subtitle, font=font_date, fill=TEXT_WHITE)
+    draw.text((30, 78), subtitle, font=font_subtitle, fill=TEXT_WHITE)
 
-    # Total events count (top right)
+    # Total count
     total = sum(len(events_by_date[d]) for d in week_dates)
     count_text = f"សរុប: {total} ព្រឹត្តិការណ៍"
-    bbox = draw.textbbox((0, 0), count_text, font=font_day)
+    bbox = draw.textbbox((0, 0), count_text, font=font_subtitle)
     draw.text((WIDTH - (bbox[2] - bbox[0]) - 30, 50),
-              count_text, font=font_day, fill=TEXT_WHITE)
+              count_text, font=font_subtitle, fill=TEXT_WHITE)
 
-    # Day columns
+    # ═══ Day columns ═══
     today = datetime.now(TZ).date()
     for i, d in enumerate(week_dates):
         x = i * COL_W
         y = HEADER_H
 
-        # Background
         is_weekend = d.weekday() >= 5
         is_today = d == today
 
@@ -396,10 +449,8 @@ def generate_week_calendar(start_date=None):
         else:
             bg = (255, 255, 255)
 
-        draw.rectangle([x, y, x + COL_W, HEIGHT], fill=bg)
-
-        # Border
-        draw.line([x, y, x, HEIGHT], fill=BORDER, width=1)
+        draw.rectangle([x, y, x + COL_W, HEIGHT - FOOTER_H], fill=bg)
+        draw.line([x, y, x, HEIGHT - FOOTER_H], fill=BORDER, width=1)
 
         # Day header
         day_short = WEEKDAY_SHORT[d.weekday()]
@@ -409,80 +460,78 @@ def generate_week_calendar(start_date=None):
         if is_today:
             header_color = HEADER_BG
 
-        # Weekday name
+        # Weekday name (English)
         bbox = draw.textbbox((0, 0), day_short, font=font_day)
         w = bbox[2] - bbox[0]
-        draw.text((x + (COL_W - w) // 2, y + 10),
+        draw.text((x + (COL_W - w) // 2, y + 12),
                   day_short, font=font_day, fill=header_color)
 
-        # Day number (large)
+        # Day number
         day_num = str(d.day)
         bbox = draw.textbbox((0, 0), day_num, font=font_date)
         w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
 
         if is_today:
-            # Draw circle around today's date
             cx = x + COL_W // 2
             cy = y + 60
-            r = 25
-            draw.ellipse([cx - r, cy - r, cx + r, cy + r],
-                         fill=HEADER_BG)
-            draw.text((cx - w // 2, cy - 18), day_num,
+            r = 28
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=HEADER_BG)
+            draw.text((cx - w // 2, cy - h // 2 - 3), day_num,
                       font=font_date, fill=TEXT_WHITE)
         else:
-            draw.text((x + (COL_W - w) // 2, y + 40),
+            draw.text((x + (COL_W - w) // 2, y + 42),
                       day_num, font=font_date, fill=TEXT_DARK)
 
-        # Khmer weekday name (small)
+        # Khmer weekday name
         bbox = draw.textbbox((0, 0), day_khmer, font=font_small)
         w = bbox[2] - bbox[0]
-        draw.text((x + (COL_W - w) // 2, y + 85),
+        draw.text((x + (COL_W - w) // 2, y + 88),
                   day_khmer, font=font_small, fill=TEXT_GRAY)
 
-        # Events
+        # ═══ Events ═══
         events = events_by_date[d]
-        event_y = y + DAY_HEADER_H + 30
+        event_y = y + DAY_HEADER_H + 10
 
-        for j, e in enumerate(events[:6]):  # max 6 events per day
+        for j, e in enumerate(events):
             color = EVENT_COLORS[j % len(EVENT_COLORS)]
 
-            # Event box
             box_x = x + 8
-            box_y = event_y
             box_w = COL_W - 16
-            box_h = 55
 
-            # Rounded rectangle background
-            draw.rectangle([box_x, box_y, box_x + box_w, box_y + box_h],
+            # Wrap event text
+            event_text = e['event']
+            text_max_w = box_w - (EVENT_PADDING * 2)
+            lines = wrap_text(event_text, font_event, text_max_w, draw)
+
+            # Calculate box height
+            box_h = 25 + (len(lines) * EVENT_LINE_HEIGHT) + 15
+            box_h = max(box_h, EVENT_MIN_HEIGHT)
+
+            # Draw event box
+            draw.rectangle([box_x, event_y, box_x + box_w, event_y + box_h],
                            fill=color)
 
             # Event ID
             id_text = f"#{e['id']}"
-            draw.text((box_x + 8, box_y + 5), id_text,
-                      font=font_small, fill=TEXT_WHITE)
+            draw.text((box_x + EVENT_PADDING, event_y + 6), id_text,
+                      font=font_id, fill=TEXT_WHITE)
 
-            # Event text (truncate if too long)
-            event_text = e['event']
-            if len(event_text) > 18:
-                event_text = event_text[:16] + ".."
+            # Draw wrapped text lines
+            text_y = event_y + 25
+            for line in lines:
+                draw.text((box_x + EVENT_PADDING, text_y),
+                          line, font=font_event, fill=TEXT_WHITE)
+                text_y += EVENT_LINE_HEIGHT
 
-            draw.text((box_x + 8, box_y + 25), event_text,
-                      font=font_event, fill=TEXT_WHITE)
+            event_y += box_h + EVENT_GAP
 
-            event_y += box_h + 8
-
-        # Show "+N more" if too many
-        if len(events) > 6:
-            more_text = f"+{len(events) - 6} ផ្សេងទៀត"
-            draw.text((x + 8, event_y + 5), more_text,
-                      font=font_small, fill=TEXT_GRAY)
-
-    # Footer
-    footer_y = HEIGHT - 30
+    # ═══ Footer ═══
+    footer_y = HEIGHT - 28
     footer_text = f"Generated by Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
     draw.text((30, footer_y), footer_text, font=font_small, fill=TEXT_GRAY)
 
-    # Save to BytesIO
+    # Save
     output = BytesIO()
     img.save(output, format="PNG", quality=95)
     output.seek(0)
