@@ -6,7 +6,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-import assemblyai as aai
+import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
 from telegram import Update
@@ -21,7 +21,7 @@ from flask import Flask
 
 # ─── Load Environment Variables ───
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 PORT = int(os.environ.get("PORT", 10000))
@@ -33,8 +33,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─── AssemblyAI Setup ───
-aai.settings.api_key = ASSEMBLYAI_API_KEY
+# ─── Gemini Setup ───
+genai.configure(api_key=GEMINI_API_KEY)
+gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+logger.info("Gemini AI configured!")
 
 # ─── Google Sheets Setup ───
 SCOPES = [
@@ -153,7 +155,7 @@ def extract_event(text):
     )
     event = re.sub(r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}", "", event)
     event = re.sub(r"\s+", " ", event).strip()
-    for prefix in ["មាន", "នឹង", "ត្រូវ", "ទៅ", "គឺ"]:
+    for prefix in ["មាន", "នឹង", "ត្រូវ", "ទៅ", "គឺ", ","]:
         if event.startswith(prefix):
             event = event[len(prefix):].strip()
     return event if event else text
@@ -170,14 +172,37 @@ def save_to_sheet(date_str, event, original_text):
     return row_num
 
 
+# ──────────────────────────────────────
+# Speech-to-Text (Gemini AI - Support Khmer!)
+# ──────────────────────────────────────
+
 def transcribe_audio(file_path):
-    config = aai.TranscriptionConfig(language_code="km")
-    transcriber = aai.Transcriber()
-    transcript = transcriber.transcribe(file_path, config=config)
-    if transcript.status == aai.TranscriptStatus.error:
-        logger.error(f"Transcription error: {transcript.error}")
+    """Use Gemini to transcribe Khmer audio."""
+    try:
+        logger.info(f"Uploading audio to Gemini: {file_path}")
+        audio_file = genai.upload_file(path=file_path)
+
+        prompt = (
+            "សូមស្តាប់សំឡេងនេះ ហើយបំលែងទៅជាអក្សរខ្មែរ។ "
+            "សូមឆ្លើយតែអក្សរខ្មែរប៉ុណ្ណោះ គ្មានការពន្យល់អ្វីទេ។ "
+            "Please transcribe this Khmer audio to Khmer text. "
+            "Return ONLY the Khmer text, no explanation."
+        )
+
+        response = gemini_model.generate_content([prompt, audio_file])
+        text = response.text.strip()
+
+        # Delete uploaded file from Gemini
+        try:
+            genai.delete_file(audio_file.name)
+        except Exception:
+            pass
+
+        logger.info(f"Transcribed: {text}")
+        return text
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
         return None
-    return transcript.text
 
 
 # ──────────────────────────────────────
@@ -228,7 +253,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = f"/tmp/{voice.file_id}.ogg"
         await file.download_to_drive(file_path)
 
-        await update.message.reply_text("🔄 កំពុងបំលែងសំឡេង...")
+        await update.message.reply_text("🔄 កំពុងបំលែងសំឡេង (Gemini AI)...")
         loop = asyncio.get_event_loop()
         text = await loop.run_in_executor(
             None, transcribe_audio, file_path
@@ -279,7 +304,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────
-# Flask Web Server (ដើម្បីបំពេញ Port requirement)
+# Flask Web Server
 # ──────────────────────────────────────
 
 flask_app = Flask(__name__)
@@ -318,15 +343,9 @@ def run_bot():
     app.run_polling(drop_pending_updates=True)
 
 
-# ──────────────────────────────────────
-# Main
-# ──────────────────────────────────────
-
 if __name__ == "__main__":
-    # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info(f"Flask web server started on port {PORT}")
 
-    # Run Telegram bot in main thread
     run_bot()
