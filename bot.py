@@ -6,7 +6,8 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import gspread
 from google.oauth2.service_account import Credentials
 from telegram import Update
@@ -33,10 +34,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─── Gemini Setup ───
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-logger.info("Gemini AI configured!")
+# ─── Gemini Setup (New Library) ───
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = "gemini-2.5-flash"
+logger.info("Gemini AI (new SDK) configured!")
 
 # ─── Google Sheets Setup ───
 SCOPES = [
@@ -173,31 +174,37 @@ def save_to_sheet(date_str, event, original_text):
 
 
 # ──────────────────────────────────────
-# Speech-to-Text (Gemini AI - Support Khmer!)
+# Speech-to-Text (Gemini 2.5 Flash)
 # ──────────────────────────────────────
 
 def transcribe_audio(file_path):
-    """Use Gemini to transcribe Khmer audio."""
+    """Use Gemini 2.5 Flash to transcribe Khmer audio."""
     try:
-        logger.info(f"Uploading audio to Gemini: {file_path}")
-        audio_file = genai.upload_file(path=file_path)
+        logger.info(f"Reading audio file: {file_path}")
+
+        # Read audio file as bytes
+        with open(file_path, "rb") as f:
+            audio_bytes = f.read()
 
         prompt = (
             "សូមស្តាប់សំឡេងនេះ ហើយបំលែងទៅជាអក្សរខ្មែរ។ "
             "សូមឆ្លើយតែអក្សរខ្មែរប៉ុណ្ណោះ គ្មានការពន្យល់អ្វីទេ។ "
             "Please transcribe this Khmer audio to Khmer text. "
-            "Return ONLY the Khmer text, no explanation."
+            "Return ONLY the Khmer text, no explanation, no translation."
         )
 
-        response = gemini_model.generate_content([prompt, audio_file])
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                prompt,
+                types.Part.from_bytes(
+                    data=audio_bytes,
+                    mime_type="audio/ogg",
+                ),
+            ],
+        )
+
         text = response.text.strip()
-
-        # Delete uploaded file from Gemini
-        try:
-            genai.delete_file(audio_file.name)
-        except Exception:
-            pass
-
         logger.info(f"Transcribed: {text}")
         return text
     except Exception as e:
@@ -253,7 +260,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = f"/tmp/{voice.file_id}.ogg"
         await file.download_to_drive(file_path)
 
-        await update.message.reply_text("🔄 កំពុងបំលែងសំឡេង (Gemini AI)...")
+        await update.message.reply_text("🔄 កំពុងបំលែងសំឡេង (Gemini 2.5)...")
         loop = asyncio.get_event_loop()
         text = await loop.run_in_executor(
             None, transcribe_audio, file_path
