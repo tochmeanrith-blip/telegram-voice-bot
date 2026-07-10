@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Gemini Setup (New Library) ───
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-flash-latest"
 logger.info("Gemini AI (new SDK) configured!")
 
 # ─── Google Sheets Setup ───
