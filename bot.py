@@ -241,19 +241,60 @@ def parse_khmer_date(text):
 
 
 def extract_event(text):
+    """ស្រង់យកតែផ្នែក event ដោយលុបកាលបរិច្ឆេទចេញ"""
     event = text
+
+    # Remove relative days
     for keyword in KHMER_RELATIVE_DAYS:
         event = event.replace(keyword, "")
+
+    # Remove weekdays
     for keyword in KHMER_WEEKDAYS:
         event = event.replace(keyword, "")
-    event = re.sub(r"ថ្ងៃទី\s*\S+\s*ខែ\s*\S+(\s*ឆ្នាំ\s*\S+)?", "", event)
-    event = re.sub(r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}", "", event)
-    event = re.sub(r"\s+", " ", event).strip()
-    for prefix in ["មាន", "នឹង", "ត្រូវ", "ទៅ", "គឺ", ",", "."]:
-        if event.startswith(prefix):
-            event = event[len(prefix):].strip()
-    return event if event else text
 
+    # Remove Khmer date patterns
+    for month_name in KHMER_MONTHS:
+        # "ថ្ងៃទី DD ខែ MM ឆ្នាំ YYYY"
+        event = re.sub(
+            rf"ថ្ងៃទី\s*[\d០-៩]+\s*ខែ\s*{month_name}(\s*ឆ្នាំ\s*[\d០-៩]+)?",
+            "", event
+        )
+        # "ថ្ងៃ DD MM YYYY"
+        event = re.sub(
+            rf"ថ្ងៃ\s*[\d០-៩]+\s*{month_name}\s*[\d០-៩]*",
+            "", event
+        )
+        # "ទី DD MM"
+        event = re.sub(
+            rf"ទី\s*[\d០-៩]+\s*{month_name}\s*[\d០-៩]*",
+            "", event
+        )
+        # "DD MM YYYY" ឬ "DD MM"
+        event = re.sub(
+            rf"[\d០-៩]+\s*{month_name}\s*[\d០-៩]*",
+            "", event
+        )
+        # "MM DD"
+        event = re.sub(
+            rf"{month_name}\s*[\d០-៩]+",
+            "", event
+        )
+
+    # Remove numeric dates (15/7/2026)
+    event = re.sub(r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}", "", event)
+
+    # Remove standalone year (ឆ្នាំ ២០២៦)
+    event = re.sub(r"ឆ្នាំ\s*[\d០-៩]+", "", event)
+
+    # Clean up
+    event = re.sub(r"\s+", " ", event).strip()
+
+    # Remove leading connectors
+    for prefix in ["មាន", "នឹង", "ត្រូវ", "ទៅ", "គឺ", ",", ".", "-", ":"]:
+        while event.startswith(prefix):
+            event = event[len(prefix):].strip()
+
+    return event if event else text
 
 # ══════════════════════════════════════
 # Sheet Operations
