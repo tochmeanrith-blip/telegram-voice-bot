@@ -35,10 +35,8 @@ GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 CHAT_ID = os.environ.get("CHAT_ID")
 PORT = int(os.environ.get("PORT", 10000))
 
-# Timezone
 TZ = pytz.timezone("Asia/Phnom_Penh")
 
-# ─── Logging ───
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -60,17 +58,22 @@ gc = gspread.authorize(creds)
 spreadsheet = gc.open_by_key(GOOGLE_SHEET_ID)
 worksheet = spreadsheet.sheet1
 
+# ✅ CHANGED: 4 columns (removed "អត្ថបទដើម")
 try:
-    if not worksheet.row_values(1):
-        worksheet.update("A1:E1", [[
-            "#", "កាលបរិច្ឆេទ", "ម៉ោង",
-            "ព្រឹត្តិការណ៍", "អត្ថបទដើម"
+    header = worksheet.row_values(1)
+    if not header or len(header) < 4:
+        worksheet.update("A1:D1", [[
+            "#", "កាលបរិច្ឆេទ", "ម៉ោង", "ព្រឹត្តិការណ៍"
         ]])
-except Exception:
-    worksheet.update("A1:E1", [[
-        "#", "កាលបរិច្ឆេទ", "ម៉ោង",
-        "ព្រឹត្តិការណ៍", "អត្ថបទដើម"
-    ]])
+    # ✅ លុប Column E បើមាន (សម្អាតទិន្នន័យចាស់)
+    if len(header) >= 5:
+        try:
+            worksheet.batch_clear(["E:E"])
+            logger.info("Cleared old Column E")
+        except Exception as e:
+            logger.warning(f"Could not clear Column E: {e}")
+except Exception as e:
+    logger.error(f"Header setup error: {e}")
 
 logger.info("Sheet connected!")
 
@@ -111,26 +114,14 @@ def khmer_to_arabic(text):
 
 
 def parse_khmer_date(text):
-    """
-    Parse Khmer date from text - Enhanced version.
-    Supports:
-    - ថ្ងៃនេះ, ថ្ងៃស្អែក, ម្សិលមិញ, ខានស្អែក
-    - ថ្ងៃច័ន្ទ, ថ្ងៃអង្គារ, ...
-    - ថ្ងៃទី ១៥ ខែ កក្កដា ឆ្នាំ ២០២៦
-    - ថ្ងៃ ១៥ កក្កដា ២០២៦
-    - ១៥ កក្កដា ២០២៦
-    - 15/7/2026, 15-7-2026
-    - ទី១៥ កក្កដា
-    """
+    """Parse Khmer date - keep original regex logic"""
     today = datetime.now(TZ)
     normalized = khmer_to_arabic(text)
 
-    # 1. Relative days (ថ្ងៃនេះ, ថ្ងៃស្អែក, ...)
     for keyword, delta in KHMER_RELATIVE_DAYS.items():
         if keyword in text:
             return (today + timedelta(days=delta)).strftime("%Y-%m-%d")
 
-    # 2. Weekdays (ថ្ងៃច័ន្ទ, ថ្ងៃអង្គារ, ...)
     for keyword, weekday in KHMER_WEEKDAYS.items():
         if keyword in text:
             current = today.weekday()
@@ -139,7 +130,6 @@ def parse_khmer_date(text):
                 diff += 7
             return (today + timedelta(days=diff)).strftime("%Y-%m-%d")
 
-    # 3. DD/MM/YYYY ឬ DD-MM-YYYY (ពិនិត្យមុនគេ)
     date_pattern = re.search(
         r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", normalized
     )
@@ -154,158 +144,124 @@ def parse_khmer_date(text):
         except ValueError:
             pass
 
-    # 4. រកឃ្លាដែលមានឈ្មោះខែខ្មែរ (Enhanced patterns)
     for month_name, month_num in KHMER_MONTHS.items():
-        # Pattern A: "ថ្ងៃទី DD ខែ MM ឆ្នាំ YYYY"
-        pattern_a = rf"ថ្ងៃទី\s*(\d{{1,2}})\s*ខែ\s*{month_name}"
-        match = re.search(pattern_a, normalized)
-        if match:
-            day = int(match.group(1))
-            year_match = re.search(r"ឆ្នាំ\s*(\d{4})", normalized)
-            year = int(year_match.group(1)) if year_match else today.year
-            try:
-                return datetime(year, month_num, day).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
+        for pattern in [
+            rf"ថ្ងៃទី\s*(\d{{1,2}})\s*ខែ\s*{month_name}",
+            rf"ថ្ងៃ\s*(\d{{1,2}})\s*{month_name}",
+            rf"ទី\s*(\d{{1,2}})\s*{month_name}",
+            rf"(\d{{1,2}})\s*{month_name}\s*(\d{{4}})",
+            rf"(\d{{1,2}})\s*{month_name}",
+            rf"{month_name}\s*(\d{{1,2}})",
+        ]:
+            match = re.search(pattern, normalized)
+            if match:
+                try:
+                    day = int(match.group(1))
+                    year_match = re.search(r"(\d{4})", normalized)
+                    year = int(year_match.group(1)) if year_match else today.year
+                    target = datetime(year, month_num, day)
+                    if not year_match and target.date() < today.date():
+                        target = datetime(year + 1, month_num, day)
+                    return target.strftime("%Y-%m-%d")
+                except (ValueError, IndexError):
+                    continue
 
-        # Pattern B: "ថ្ងៃ DD MM YYYY" (គ្មាន "ខែ", គ្មាន "ទី")
-        pattern_b = rf"ថ្ងៃ\s*(\d{{1,2}})\s*{month_name}"
-        match = re.search(pattern_b, normalized)
-        if match:
-            day = int(match.group(1))
-            # Search year anywhere
-            year_match = re.search(rf"{month_name}\s*(\d{{4}})", normalized)
-            if not year_match:
-                year_match = re.search(r"ឆ្នាំ\s*(\d{4})", normalized)
-            year = int(year_match.group(1)) if year_match else today.year
-            try:
-                return datetime(year, month_num, day).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-        # Pattern C: "ទី DD MM" ឬ "ទី៥ កក្កដា"
-        pattern_c = rf"ទី\s*(\d{{1,2}})\s*{month_name}"
-        match = re.search(pattern_c, normalized)
-        if match:
-            day = int(match.group(1))
-            year_match = re.search(rf"{month_name}\s*(\d{{4}})", normalized)
-            year = int(year_match.group(1)) if year_match else today.year
-            try:
-                return datetime(year, month_num, day).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-        # Pattern D: "DD MM YYYY" (លេខ + ខែ + ឆ្នាំ)
-        pattern_d = rf"(\d{{1,2}})\s*{month_name}\s*(\d{{4}})"
-        match = re.search(pattern_d, normalized)
-        if match:
-            day = int(match.group(1))
-            year = int(match.group(2))
-            try:
-                return datetime(year, month_num, day).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-        # Pattern E: "DD MM" (លេខ + ខែ, គ្មានឆ្នាំ - យកឆ្នាំបច្ចុប្បន្ន)
-        pattern_e = rf"(\d{{1,2}})\s*{month_name}"
-        match = re.search(pattern_e, normalized)
-        if match:
-            day = int(match.group(1))
-            year = today.year
-            try:
-                target = datetime(year, month_num, day)
-                # បើកាលបរិច្ឆេទបានកន្លងទៅហើយ → យកឆ្នាំក្រោយ
-                if target.date() < today.date():
-                    target = datetime(year + 1, month_num, day)
-                return target.strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-        # Pattern F: "MM DD" (ខែ + លេខ)
-        pattern_f = rf"{month_name}\s*(\d{{1,2}})"
-        match = re.search(pattern_f, normalized)
-        if match:
-            day = int(match.group(1))
-            year_match = re.search(r"(\d{4})", normalized)
-            year = int(year_match.group(1)) if year_match else today.year
-            try:
-                target = datetime(year, month_num, day)
-                if not year_match and target.date() < today.date():
-                    target = datetime(year + 1, month_num, day)
-                return target.strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-    # Fallback: today
     return today.strftime("%Y-%m-%d")
 
 
 def extract_event(text):
-    """ស្រង់យកតែផ្នែក event ដោយលុបកាលបរិច្ឆេទចេញ"""
+    """Extract event by removing date parts"""
     event = text
 
-    # Remove relative days
     for keyword in KHMER_RELATIVE_DAYS:
         event = event.replace(keyword, "")
-
-    # Remove weekdays
     for keyword in KHMER_WEEKDAYS:
         event = event.replace(keyword, "")
 
-    # Remove Khmer date patterns
     for month_name in KHMER_MONTHS:
-        # "ថ្ងៃទី DD ខែ MM ឆ្នាំ YYYY"
         event = re.sub(
             rf"ថ្ងៃទី\s*[\d០-៩]+\s*ខែ\s*{month_name}(\s*ឆ្នាំ\s*[\d០-៩]+)?",
-            "", event
-        )
-        # "ថ្ងៃ DD MM YYYY"
+            "", event)
         event = re.sub(
-            rf"ថ្ងៃ\s*[\d០-៩]+\s*{month_name}\s*[\d០-៩]*",
-            "", event
-        )
-        # "ទី DD MM"
+            rf"ថ្ងៃ\s*[\d០-៩]+\s*{month_name}\s*[\d០-៩]*", "", event)
         event = re.sub(
-            rf"ទី\s*[\d០-៩]+\s*{month_name}\s*[\d០-៩]*",
-            "", event
-        )
-        # "DD MM YYYY" ឬ "DD MM"
+            rf"ទី\s*[\d០-៩]+\s*{month_name}\s*[\d០-៩]*", "", event)
         event = re.sub(
-            rf"[\d០-៩]+\s*{month_name}\s*[\d០-៩]*",
-            "", event
-        )
-        # "MM DD"
-        event = re.sub(
-            rf"{month_name}\s*[\d០-៩]+",
-            "", event
-        )
+            rf"[\d០-៩]+\s*{month_name}\s*[\d០-៩]*", "", event)
+        event = re.sub(rf"{month_name}\s*[\d០-៩]+", "", event)
 
-    # Remove numeric dates (15/7/2026)
     event = re.sub(r"\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}", "", event)
-
-    # Remove standalone year (ឆ្នាំ ២០២៦)
     event = re.sub(r"ឆ្នាំ\s*[\d០-៩]+", "", event)
-
-    # Clean up
     event = re.sub(r"\s+", " ", event).strip()
 
-    # Remove leading connectors
     for prefix in ["មាន", "នឹង", "ត្រូវ", "ទៅ", "គឺ", ",", ".", "-", ":"]:
         while event.startswith(prefix):
             event = event[len(prefix):].strip()
 
     return event if event else text
 
+
+# ✨ NEW: AI-powered parsing (accurate ជាង regex)
+def parse_with_ai(text):
+    """
+    ប្រើ Gemini បំបែក date + event ស្អាតជាង
+    Returns: (date_str, event_text)
+    """
+    try:
+        today = datetime.now(TZ).strftime("%Y-%m-%d")
+        prompt = f"""អ្នកគឺជាកម្មវិធីវិភាគអត្ថបទខ្មែរ។
+
+ថ្ងៃនេះគឺ: {today}
+
+សូមបំបែកអត្ថបទខាងក្រោមជា JSON:
+- "date": កាលបរិច្ឆេទក្នុងទម្រង់ YYYY-MM-DD
+- "event": ព្រឹត្តិការណ៍តែប៉ុណ្ណោះ (កាត់ចេញរាល់ពាក្យទាក់ទងកាលបរិច្ឆេទ ដូចជា "ថ្ងៃទី", "ខែ", "ឆ្នាំ", ថ្ងៃនៃសប្តាហ៍)
+
+ច្បាប់៖
+1. បើគ្មានកាលបរិច្ឆេទ ត្រូវប្រើថ្ងៃនេះ ({today})
+2. បើនិយាយថា "ថ្ងៃស្អែក" ត្រូវបូក ១ ថ្ងៃ
+3. Event ត្រូវរក្សាអត្ថន័យពេញលេញ តែកាត់តែ date words ចេញ
+4. ឆ្លើយតែ JSON ប៉ុណ្ណោះ គ្មានពាក្យផ្សេង
+
+អត្ថបទ: "{text}"
+
+JSON:"""
+
+        response = gemini_client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[prompt],
+        )
+        result = response.text.strip()
+        result = re.sub(r"^```json\s*|\s*```$", "", result).strip()
+        result = re.sub(r"^```\s*|\s*```$", "", result).strip()
+        
+        data = json.loads(result)
+        date_str = data.get("date", "").strip()
+        event = data.get("event", "").strip()
+
+        # Validate date format
+        datetime.strptime(date_str, "%Y-%m-%d")
+        
+        if date_str and event:
+            return date_str, event
+    except Exception as e:
+        logger.warning(f"AI parse failed, using regex: {e}")
+
+    # Fallback ទៅ regex
+    return parse_khmer_date(text), extract_event(text)
+
+
 # ══════════════════════════════════════
-# Sheet Operations
+# Sheet Operations (✅ 4 columns only)
 # ══════════════════════════════════════
 
-def save_to_sheet(date_str, event, original_text):
+def save_to_sheet(date_str, event):
+    """✅ CHANGED: Removed original_text parameter"""
     now = datetime.now(TZ)
     time_str = now.strftime("%H:%M:%S")
     all_values = worksheet.get_all_values()
     row_num = len(all_values)
-    new_row = [row_num, date_str, time_str, event, original_text]
+    new_row = [row_num, date_str, time_str, event]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
     return row_num
 
@@ -336,14 +292,16 @@ def renumber_rows():
 
 
 def get_all_events():
+    """✅ CHANGED: Only 4 columns"""
     all_values = worksheet.get_all_values()
     events = []
     for row in all_values[1:]:
         if len(row) >= 4 and row[0]:
             events.append({
-                "id": row[0], "date": row[1], "time": row[2],
+                "id": row[0],
+                "date": row[1],
+                "time": row[2],
                 "event": row[3],
-                "original": row[4] if len(row) > 4 else "",
             })
     return events
 
@@ -423,14 +381,12 @@ def extract_from_image(file_path):
 
 
 # ══════════════════════════════════════
-# 🎨 GENERATE WEEKLY CALENDAR IMAGE (V2)
+# 🎨 GENERATE WEEKLY CALENDAR IMAGE
 # ══════════════════════════════════════
 
 def wrap_text(text, font, max_width, draw):
-    """បំបែកអត្ថបទចុះបន្ទាត់ស្វ័យប្រវត្តិ"""
     lines = []
-    words = list(text)  # split by character (សម្រាប់ខ្មែរ)
-
+    words = list(text)
     current_line = ""
     for char in words:
         test_line = current_line + char
@@ -442,24 +398,20 @@ def wrap_text(text, font, max_width, draw):
             if current_line:
                 lines.append(current_line)
             current_line = char
-
     if current_line:
         lines.append(current_line)
-
     return lines
 
 
 def generate_week_calendar(start_date=None):
-    """បង្កើតរូបភាព Calendar សម្រាប់សប្តាហ៍មួយ - V2 (Full Description)"""
-
-    # Setup
+    """✅ Uses Column B (date) & Column D (event)"""
     if start_date is None:
         today = datetime.now(TZ).date()
         start_date = today - timedelta(days=today.weekday())
 
     week_dates = [start_date + timedelta(days=i) for i in range(7)]
 
-    # Get events
+    # ✅ ទាញ events ដោយ date ពី Column B, event ពី Column D
     all_events = get_all_events()
     events_by_date = defaultdict(list)
     for e in all_events:
@@ -470,21 +422,23 @@ def generate_week_calendar(start_date=None):
         except Exception:
             pass
 
-    # ═══ Load fonts ═══
+    # ✅ Sort events by ID within each date
+    for d in events_by_date:
+        events_by_date[d].sort(key=lambda x: int(x['id']) if str(x['id']).isdigit() else 0)
+
     font_path = get_khmer_font()
     try:
-        font_title = ImageFont.truetype(font_path, 38) if font_path else ImageFont.load_default()
-        font_subtitle = ImageFont.truetype(font_path, 24) if font_path else ImageFont.load_default()
-        font_date = ImageFont.truetype(font_path, 32) if font_path else ImageFont.load_default()
-        font_day = ImageFont.truetype(font_path, 20) if font_path else ImageFont.load_default()
-        font_event = ImageFont.truetype(font_path, 17) if font_path else ImageFont.load_default()
-        font_id = ImageFont.truetype(font_path, 13) if font_path else ImageFont.load_default()
-        font_small = ImageFont.truetype(font_path, 14) if font_path else ImageFont.load_default()
+        font_title = ImageFont.truetype(font_path, 38)
+        font_subtitle = ImageFont.truetype(font_path, 24)
+        font_date = ImageFont.truetype(font_path, 32)
+        font_day = ImageFont.truetype(font_path, 20)
+        font_event = ImageFont.truetype(font_path, 17)
+        font_id = ImageFont.truetype(font_path, 13)
+        font_small = ImageFont.truetype(font_path, 14)
     except Exception:
         font_title = font_subtitle = font_date = font_day = font_event = font_id = font_small = ImageFont.load_default()
 
-    # ═══ Image dimensions ═══
-    WIDTH = 1800  # ធំជាងមុន
+    WIDTH = 1800
     HEADER_H = 130
     DAY_HEADER_H = 110
     COL_W = WIDTH // 7
@@ -493,11 +447,7 @@ def generate_week_calendar(start_date=None):
     EVENT_MIN_HEIGHT = 55
     EVENT_GAP = 8
 
-    # ═══ Calculate needed height ═══
-    # ស្វែងរកកម្ពស់អតិបរមាដែលត្រូវការសម្រាប់ថ្ងៃដែលមាន events ច្រើនបំផុត
     max_content_h = 0
-
-    # Temporary draw for text measurement
     temp_img = Image.new("RGB", (100, 100))
     temp_draw = ImageDraw.Draw(temp_img)
 
@@ -509,19 +459,16 @@ def generate_week_calendar(start_date=None):
             event_text = e['event']
             text_max_w = COL_W - (EVENT_PADDING * 2) - 20
             lines = wrap_text(event_text, font_event, text_max_w, temp_draw)
-            # ID line + content lines + padding
             box_h = 25 + (len(lines) * EVENT_LINE_HEIGHT) + 15
             total_h += max(box_h, EVENT_MIN_HEIGHT) + EVENT_GAP
         day_heights[d] = total_h
         if total_h > max_content_h:
             max_content_h = total_h
 
-    # ═══ Total image height ═══
-    CONTENT_H = max(max_content_h + 30, 500)  # យ៉ាងតិច 500px
+    CONTENT_H = max(max_content_h + 30, 500)
     FOOTER_H = 40
     HEIGHT = HEADER_H + DAY_HEADER_H + CONTENT_H + FOOTER_H
 
-    # ═══ Colors ═══
     BG = (245, 247, 250)
     HEADER_BG = (66, 133, 244)
     WEEKEND_BG = (255, 243, 224)
@@ -531,19 +478,13 @@ def generate_week_calendar(start_date=None):
     TEXT_GRAY = (95, 99, 104)
     TEXT_WHITE = (255, 255, 255)
     EVENT_COLORS = [
-        (52, 168, 83),
-        (251, 188, 5),
-        (234, 67, 53),
-        (156, 39, 176),
-        (0, 172, 193),
-        (255, 112, 67),
+        (52, 168, 83), (251, 188, 5), (234, 67, 53),
+        (156, 39, 176), (0, 172, 193), (255, 112, 67),
     ]
 
-    # ═══ Create image ═══
     img = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(img)
 
-    # ═══ Header ═══
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=HEADER_BG)
     end_date = start_date + timedelta(days=6)
     title = "📅 កាលវិភាគសប្តាហ៍"
@@ -554,14 +495,12 @@ def generate_week_calendar(start_date=None):
     draw.text((30, 25), title, font=font_title, fill=TEXT_WHITE)
     draw.text((30, 78), subtitle, font=font_subtitle, fill=TEXT_WHITE)
 
-    # Total count
     total = sum(len(events_by_date[d]) for d in week_dates)
     count_text = f"សរុប: {total} ព្រឹត្តិការណ៍"
     bbox = draw.textbbox((0, 0), count_text, font=font_subtitle)
     draw.text((WIDTH - (bbox[2] - bbox[0]) - 30, 50),
               count_text, font=font_subtitle, fill=TEXT_WHITE)
 
-    # ═══ Day columns ═══
     today = datetime.now(TZ).date()
     for i, d in enumerate(week_dates):
         x = i * COL_W
@@ -580,7 +519,6 @@ def generate_week_calendar(start_date=None):
         draw.rectangle([x, y, x + COL_W, HEIGHT - FOOTER_H], fill=bg)
         draw.line([x, y, x, HEIGHT - FOOTER_H], fill=BORDER, width=1)
 
-        # Day header
         day_short = WEEKDAY_SHORT[d.weekday()]
         day_khmer = WEEKDAY_NAMES[d.weekday()]
 
@@ -588,13 +526,11 @@ def generate_week_calendar(start_date=None):
         if is_today:
             header_color = HEADER_BG
 
-        # Weekday name (English)
         bbox = draw.textbbox((0, 0), day_short, font=font_day)
         w = bbox[2] - bbox[0]
         draw.text((x + (COL_W - w) // 2, y + 12),
                   day_short, font=font_day, fill=header_color)
 
-        # Day number
         day_num = str(d.day)
         bbox = draw.textbbox((0, 0), day_num, font=font_date)
         w = bbox[2] - bbox[0]
@@ -611,13 +547,11 @@ def generate_week_calendar(start_date=None):
             draw.text((x + (COL_W - w) // 2, y + 42),
                       day_num, font=font_date, fill=TEXT_DARK)
 
-        # Khmer weekday name
         bbox = draw.textbbox((0, 0), day_khmer, font=font_small)
         w = bbox[2] - bbox[0]
         draw.text((x + (COL_W - w) // 2, y + 88),
                   day_khmer, font=font_small, fill=TEXT_GRAY)
 
-        # ═══ Events ═══
         events = events_by_date[d]
         event_y = y + DAY_HEADER_H + 10
 
@@ -627,25 +561,20 @@ def generate_week_calendar(start_date=None):
             box_x = x + 8
             box_w = COL_W - 16
 
-            # Wrap event text
             event_text = e['event']
             text_max_w = box_w - (EVENT_PADDING * 2)
             lines = wrap_text(event_text, font_event, text_max_w, draw)
 
-            # Calculate box height
             box_h = 25 + (len(lines) * EVENT_LINE_HEIGHT) + 15
             box_h = max(box_h, EVENT_MIN_HEIGHT)
 
-            # Draw event box
             draw.rectangle([box_x, event_y, box_x + box_w, event_y + box_h],
                            fill=color)
 
-            # Event ID
             id_text = f"#{e['id']}"
             draw.text((box_x + EVENT_PADDING, event_y + 6), id_text,
                       font=font_id, fill=TEXT_WHITE)
 
-            # Draw wrapped text lines
             text_y = event_y + 25
             for line in lines:
                 draw.text((box_x + EVENT_PADDING, text_y),
@@ -654,12 +583,10 @@ def generate_week_calendar(start_date=None):
 
             event_y += box_h + EVENT_GAP
 
-    # ═══ Footer ═══
     footer_y = HEIGHT - 28
     footer_text = f"Generated by Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
     draw.text((30, footer_y), footer_text, font=font_small, fill=TEXT_GRAY)
 
-    # Save
     output = BytesIO()
     img.save(output, format="PNG", quality=95)
     output.seek(0)
@@ -678,7 +605,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📸 ផ្ញើរូបភាព\n"
         "⌨️ វាយអក្សរផ្ទាល់\n\n"
         "📋 *Commands:*\n"
-        "/week - 🖼 កាលវិភាគសប្តាហ៍ (រូបភាព)\n"
+        "/week - 🖼 កាលវិភាគសប្តាហ៍\n"
         "/nextweek - 🖼 សប្តាហ៍ក្រោយ\n"
         "/stats - 📊 ស្ថិតិខែនេះ\n"
         "/calendar - 📅 ៣០ ថ្ងៃខាងមុខ\n"
@@ -686,8 +613,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/delete <លេខ> - 🗑 លុប\n"
         "/edit <លេខ> <អត្ថបទ> - ✏️ កែ\n"
         "/help - 📖 ជំនួយ\n\n"
-        "🔔 _រំលឹកកាលវិភាគស្វ័យប្រវត្តិ_\n"
-        "_រៀងរាល់ថ្ងៃសុក្រ ម៉ោង ៨:០០ ព្រឹក_"
+        "🔔 _រំលឹករៀងរាល់ថ្ងៃសុក្រ ៨:០០ ព្រឹក_"
     )
     await update.message.reply_text(welcome, parse_mode="Markdown")
 
@@ -697,52 +623,36 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🖼 បង្ហាញ Calendar សប្តាហ៍នេះ"""
     await update.message.reply_text("🎨 កំពុងបង្កើតរូបភាព...")
     try:
         today = datetime.now(TZ).date()
-        # Monday of current week
         monday = today - timedelta(days=today.weekday())
-
         loop = asyncio.get_event_loop()
-        img_bytes = await loop.run_in_executor(
-            None, generate_week_calendar, monday
-        )
-
+        img_bytes = await loop.run_in_executor(None, generate_week_calendar, monday)
         end = monday + timedelta(days=6)
         caption = (
             f"📅 *កាលវិភាគសប្តាហ៍នេះ*\n"
             f"📆 {monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}"
         )
-        await update.message.reply_photo(
-            photo=img_bytes, caption=caption, parse_mode="Markdown"
-        )
+        await update.message.reply_photo(photo=img_bytes, caption=caption, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Week error: {e}")
         await update.message.reply_text(f"❌ បញ្ហា: {e}")
 
 
 async def nextweek_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🖼 បង្ហាញ Calendar សប្តាហ៍ក្រោយ"""
     await update.message.reply_text("🎨 កំពុងបង្កើតរូបភាព...")
     try:
         today = datetime.now(TZ).date()
-        # Monday of next week
         monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
-
         loop = asyncio.get_event_loop()
-        img_bytes = await loop.run_in_executor(
-            None, generate_week_calendar, monday
-        )
-
+        img_bytes = await loop.run_in_executor(None, generate_week_calendar, monday)
         end = monday + timedelta(days=6)
         caption = (
             f"📅 *កាលវិភាគសប្តាហ៍ក្រោយ*\n"
             f"📆 {monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}"
         )
-        await update.message.reply_photo(
-            photo=img_bytes, caption=caption, parse_mode="Markdown"
-        )
+        await update.message.reply_photo(photo=img_bytes, caption=caption, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"NextWeek error: {e}")
         await update.message.reply_text(f"❌ បញ្ហា: {e}")
@@ -853,16 +763,12 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if len(context.args) < 2:
-            await update.message.reply_text(
-                "❌ ប្រើ: /edit <លេខ> <អត្ថបទថ្មី>"
-            )
+            await update.message.reply_text("❌ ប្រើ: /edit <លេខ> <អត្ថបទថ្មី>")
             return
         row_num = context.args[0]
         new_event = " ".join(context.args[1:])
         if edit_row(row_num, new_event):
-            await update.message.reply_text(
-                f"✅ កែ #{row_num}: {new_event}"
-            )
+            await update.message.reply_text(f"✅ កែ #{row_num}: {new_event}")
         else:
             await update.message.reply_text(f"❌ រកមិនឃើញ #{row_num}")
     except Exception as e:
@@ -885,9 +791,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ មិនអាចបំលែងបាន")
             return
 
-        date_str = parse_khmer_date(text)
-        event = extract_event(text)
-        row_num = save_to_sheet(date_str, event, text)
+        # ✨ ប្រើ AI parse
+        date_str, event = await loop.run_in_executor(None, parse_with_ai, text)
+        row_num = save_to_sheet(date_str, event)
 
         reply = (
             f"✅ *កត់ត្រា!*\n\n"
@@ -915,15 +821,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(file_path)
 
         loop = asyncio.get_event_loop()
-        date_str, event = await loop.run_in_executor(
-            None, extract_from_image, file_path
-        )
+        date_str, event = await loop.run_in_executor(None, extract_from_image, file_path)
 
         if not event:
             await update.message.reply_text("❌ វិភាគមិនបាន")
             return
 
-        row_num = save_to_sheet(date_str, event, "[រូបភាព]")
+        row_num = save_to_sheet(date_str, event)
         reply = (
             f"✅ *កត់ត្រាពីរូបភាព!*\n\n"
             f"🔢 `#{row_num}`\n"
@@ -943,12 +847,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text or text.startswith("/"):
         return
     try:
-        date_str = parse_khmer_date(text)
-        event = extract_event(text)
-        row_num = save_to_sheet(date_str, event, text)
+        # ✨ ប្រើ AI parse (accurate ជាង regex)
+        loop = asyncio.get_event_loop()
+        date_str, event = await loop.run_in_executor(None, parse_with_ai, text)
+        row_num = save_to_sheet(date_str, event)
         reply = (
             f"✅ *កត់ត្រា!*\n\n"
-            f"🔢 `#{row_num}`\n📅 {date_str}\n📝 {event}\n\n"
+            f"🔢 `#{row_num}`\n"
+            f"📅 {date_str}\n"
+            f"📝 {event}\n\n"
             f"🗑 `/delete {row_num}`\n"
             f"✏️ `/edit {row_num} <អត្ថបទ>`"
         )
@@ -962,35 +869,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════
 
 async def send_weekly_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """ផ្ញើ Calendar សប្តាហ៍ក្រោយរាល់ថ្ងៃសុក្រ ព្រឹកម៉ោង ៨:០០"""
     logger.info("🔔 Sending weekly reminder...")
-
     if not CHAT_ID:
         logger.warning("CHAT_ID not set, skipping reminder")
         return
-
     try:
         today = datetime.now(TZ).date()
-        # Monday ក្រោយ
         next_monday = today + timedelta(days=(7 - today.weekday()))
-
         loop = asyncio.get_event_loop()
-        img_bytes = await loop.run_in_executor(
-            None, generate_week_calendar, next_monday
-        )
-
+        img_bytes = await loop.run_in_executor(None, generate_week_calendar, next_monday)
         end = next_monday + timedelta(days=6)
         caption = (
             f"🔔 *រំលឹកកាលវិភាគសប្តាហ៍ក្រោយ*\n\n"
             f"📅 {next_monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}\n\n"
             f"💡 សូមរៀបចំខ្លួនសម្រាប់សប្តាហ៍ថ្មី!"
         )
-
         await context.bot.send_photo(
-            chat_id=CHAT_ID,
-            photo=img_bytes,
-            caption=caption,
-            parse_mode="Markdown"
+            chat_id=CHAT_ID, photo=img_bytes, caption=caption, parse_mode="Markdown"
         )
         logger.info("✅ Weekly reminder sent!")
     except Exception as e:
@@ -1026,7 +921,6 @@ def run_bot():
     logger.info("Starting bot...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("week", week_command))
@@ -1037,18 +931,16 @@ def run_bot():
     app.add_handler(CommandHandler("delete", delete_command))
     app.add_handler(CommandHandler("edit", edit_command))
 
-    # Messages
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # 🔔 Schedule Weekly Reminder (Friday 8:00 AM Phnom Penh)
     job_queue = app.job_queue
     reminder_time = dtime(hour=8, minute=0, tzinfo=TZ)
     job_queue.run_daily(
         send_weekly_reminder,
         time=reminder_time,
-        days=(4,),  # Friday = 4 (Monday=0)
+        days=(4,),
         name="weekly_reminder"
     )
     logger.info("📅 Weekly reminder scheduled: Every Friday at 8:00 AM")
