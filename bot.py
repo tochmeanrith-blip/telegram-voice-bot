@@ -670,8 +670,10 @@ def generate_ics(events):
 
 
 # ══════════════════════════════════════
-# 📄 PDF Calendar Generator (WeasyPrint)
+# 📄 PDF Calendar Generator (WeasyPrint) v3.3
 # ══════════════════════════════════════
+
+from weasyprint import HTML
 
 CATEGORY_COLOR_MAP = {
     "🏢 ការងារ": "#4285F4",
@@ -682,8 +684,8 @@ CATEGORY_COLOR_MAP = {
     "📌 ផ្សេងៗ": "#00ACC1",
 }
 
-FONT_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;500;700&family=Noto+Color+Emoji&display=swap');
+FONT_IMPORT = """
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;500;600;700&display=swap');
 """
 
 
@@ -731,7 +733,7 @@ def build_week_html(start_date, week_dates, events_by_date, today):
                 extra_style = "opacity: 0.75;"
             elif STATUS_CANCEL in status:
                 color = "#9E9E9E"
-                extra_style = "opacity: 0.5; text-decoration: line-through;"
+                extra_style = "opacity: 0.5;"
 
             time_html = (f'<span class="event-time">{html_escape(e["time"])}</span>'
                          if e['time'] else "")
@@ -766,7 +768,7 @@ def build_week_html(start_date, week_dates, events_by_date, today):
 <head>
 <meta charset="UTF-8">
 <style>
-{FONT_CSS}
+{FONT_IMPORT}
 
 @page {{
     size: A4 landscape;
@@ -775,57 +777,89 @@ def build_week_html(start_date, week_dates, events_by_date, today):
 
 * {{
     box-sizing: border-box;
-    font-family: 'Noto Sans Khmer', 'Noto Color Emoji', sans-serif;
     margin: 0;
     padding: 0;
+    letter-spacing: normal;
+    word-spacing: normal;
 }}
 
-body {{
+html, body {{
+    font-family: 'Noto Sans Khmer', 'Khmer OS', sans-serif;
     color: #202124;
     font-size: 10pt;
+    letter-spacing: 0;
 }}
 
+/* Numbers & English text - use Arial for tight spacing */
+.day-num, .cell-num, .weekday-en, .wd-en,
+.event-id, .event-time, .header-count-num {{
+    font-family: 'Arial', 'Helvetica', sans-serif !important;
+    letter-spacing: 0 !important;
+}}
+
+/* Header */
 .header {{
     background-color: #4285F4;
     color: white;
-    padding: 18px 22px;
+    padding: 20px 25px;
     border-radius: 8px 8px 0 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
 }}
 
-.header-left h1 {{
-    font-size: 22pt;
-    font-weight: 700;
-    margin-bottom: 5px;
+.header-flex {{
+    display: table;
+    width: 100%;
 }}
 
-.header-left .subtitle {{
+.header-left {{
+    display: table-cell;
+    vertical-align: middle;
+    width: 70%;
+}}
+
+.header-right {{
+    display: table-cell;
+    vertical-align: middle;
+    text-align: right;
     font-size: 12pt;
+    font-weight: 500;
+}}
+
+.header-title {{
+    font-size: 24pt;
+    font-weight: 700;
+    margin-bottom: 6px;
+    line-height: 1.2;
+}}
+
+.header-subtitle {{
+    font-size: 13pt;
     font-weight: 400;
     opacity: 0.95;
 }}
 
-.header-right {{
-    font-size: 11pt;
-    text-align: right;
-    font-weight: 500;
+/* Grid */
+.grid {{
+    display: table;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 4px;
+    margin-top: 4px;
+    table-layout: fixed;
 }}
 
-.grid {{
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 4px;
-    margin-top: 4px;
+.grid-row {{
+    display: table-row;
 }}
 
 .day-col {{
+    display: table-cell;
     background-color: white;
     border: 1px solid #DADCE0;
     border-radius: 6px;
+    vertical-align: top;
+    padding: 10px 8px;
+    width: 14.28%;
     min-height: 460px;
-    padding: 8px 6px;
 }}
 
 .day-col.weekend {{
@@ -836,19 +870,18 @@ body {{
     background-color: #E3F2FD;
 }}
 
+/* Day header */
 .day-header {{
     text-align: center;
-    padding-bottom: 8px;
+    padding-bottom: 10px;
     border-bottom: 1px solid #DADCE0;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }}
 
 .weekday-en {{
-    font-size: 9pt;
+    font-size: 10pt;
     font-weight: 700;
     color: #5F6368;
-    letter-spacing: 1px;
-    font-family: 'Helvetica', sans-serif;
 }}
 
 .weekday-en.weekend-text {{
@@ -860,117 +893,137 @@ body {{
 }}
 
 .day-num {{
-    font-size: 20pt;
+    font-size: 24pt;
     font-weight: 700;
     color: #202124;
-    margin: 4px 0;
-    font-family: 'Helvetica', sans-serif;
+    margin: 6px 0;
+    line-height: 1;
 }}
 
 .day-num.today-circle {{
     display: inline-block;
     background-color: #4285F4;
     color: white;
-    width: 40px;
-    height: 40px;
-    line-height: 40px;
+    width: 44px;
+    height: 44px;
+    line-height: 44px;
     border-radius: 50%;
-    font-size: 16pt;
+    font-size: 18pt;
+    text-align: center;
+    padding: 0;
+    margin: 4px auto;
 }}
 
 .weekday-kh {{
     font-size: 9pt;
     color: #5F6368;
-    margin-top: 2px;
+    margin-top: 4px;
 }}
 
+/* Events */
 .events {{
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+    padding-top: 4px;
 }}
 
 .event {{
     color: white;
-    border-radius: 4px;
-    padding: 5px 7px;
+    border-radius: 5px;
+    padding: 6px 8px;
     font-size: 8pt;
     line-height: 1.4;
+    margin-bottom: 5px;
     page-break-inside: avoid;
-    word-wrap: break-word;
 }}
 
 .event-header {{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 3px;
-    font-size: 7pt;
+    margin-bottom: 4px;
+    font-size: 7.5pt;
     font-weight: 700;
-    opacity: 0.95;
-    font-family: 'Helvetica', sans-serif;
+    overflow: hidden;
+}}
+
+.event-id {{
+    float: left;
+}}
+
+.event-time {{
+    float: right;
 }}
 
 .event-text {{
-    font-size: 8.5pt;
+    font-size: 9pt;
     line-height: 1.35;
+    clear: both;
     word-wrap: break-word;
     overflow-wrap: break-word;
 }}
 
+/* Footer */
 .footer {{
     margin-top: 10px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    display: table;
+    width: 100%;
     font-size: 8pt;
     color: #5F6368;
-    padding: 0 5px;
+    padding: 5px;
 }}
 
-.legend {{
-    display: flex;
-    gap: 14px;
+.footer-left {{
+    display: table-cell;
+    vertical-align: middle;
+}}
+
+.footer-right {{
+    display: table-cell;
+    vertical-align: middle;
+    text-align: right;
 }}
 
 .legend-item {{
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    display: inline-block;
+    margin-right: 15px;
 }}
 
 .legend-color {{
+    display: inline-block;
     width: 10px;
     height: 10px;
     border-radius: 2px;
-    display: inline-block;
+    vertical-align: middle;
+    margin-right: 4px;
 }}
 </style>
 </head>
 <body>
     <div class="header">
-        <div class="header-left">
-            <h1>📅 កាលវិភាគសប្តាហ៍</h1>
-            <div class="subtitle">{subtitle}</div>
-        </div>
-        <div class="header-right">
-            សរុប: {total} ព្រឹត្តិការណ៍
+        <div class="header-flex">
+            <div class="header-left">
+                <div class="header-title">កាលវិភាគសប្តាហ៍</div>
+                <div class="header-subtitle">{subtitle}</div>
+            </div>
+            <div class="header-right">
+                សរុប៖ <span class="header-count-num">{total}</span> ព្រឹត្តិការណ៍
+            </div>
         </div>
     </div>
 
     <div class="grid">
-        {columns_html}
+        <div class="grid-row">
+            {columns_html}
+        </div>
     </div>
 
     <div class="footer">
-        <div class="legend">
-            <div class="legend-item"><span class="legend-color" style="background:#4285F4"></span>ការងារ</div>
-            <div class="legend-item"><span class="legend-color" style="background:#EA4335"></span>គ្រួសារ</div>
-            <div class="legend-item"><span class="legend-color" style="background:#34A853"></span>សុខភាព</div>
-            <div class="legend-item"><span class="legend-color" style="background:#FBBC04"></span>ព្រឹត្តិការណ៍</div>
-            <div class="legend-item"><span class="legend-color" style="background:#9C27B0"></span>សិក្សា</div>
+        <div class="footer-left">
+            <span class="legend-item"><span class="legend-color" style="background:#4285F4"></span>ការងារ</span>
+            <span class="legend-item"><span class="legend-color" style="background:#EA4335"></span>គ្រួសារ</span>
+            <span class="legend-item"><span class="legend-color" style="background:#34A853"></span>សុខភាព</span>
+            <span class="legend-item"><span class="legend-color" style="background:#FBBC04"></span>ព្រឹត្តិការណ៍</span>
+            <span class="legend-item"><span class="legend-color" style="background:#9C27B0"></span>សិក្សា</span>
         </div>
-        <div>Voice Tracker Bot • {footer_time}</div>
+        <div class="footer-right">
+            Voice Tracker Bot • {footer_time}
+        </div>
     </div>
 </body>
 </html>
@@ -1025,7 +1078,7 @@ def build_month_html(year, month, events_by_date, today):
     weekdays_kh = ["ច័ន្ទ", "អង្គារ", "ពុធ", "ព្រហស្បតិ៍", "សុក្រ", "សៅរ៍", "អាទិត្យ"]
     weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
     for en, kh in zip(weekdays_en, weekdays_kh):
-        weekdays_html += (f'<div class="wd-header">'
+        weekdays_html += (f'<div class="wd-cell">'
                           f'<div class="wd-en">{en}</div>'
                           f'<div class="wd-kh">{kh}</div>'
                           f'</div>')
@@ -1035,56 +1088,61 @@ def build_month_html(year, month, events_by_date, today):
     total_cells = first_weekday + total_days
     rows = (total_cells + 6) // 7
 
-    cells_html = ""
-    for cell_idx in range(rows * 7):
-        day_offset = cell_idx - first_weekday
-        if 0 <= day_offset < total_days:
-            cell_date = first_day + timedelta(days=day_offset)
-            is_this_month = True
-        else:
-            if day_offset < 0:
+    rows_html = ""
+    for row_idx in range(rows):
+        row_cells = ""
+        for col_idx in range(7):
+            cell_idx = row_idx * 7 + col_idx
+            day_offset = cell_idx - first_weekday
+            if 0 <= day_offset < total_days:
                 cell_date = first_day + timedelta(days=day_offset)
+                is_this_month = True
             else:
-                cell_date = last_day + timedelta(days=day_offset - total_days + 1)
-            is_this_month = False
+                if day_offset < 0:
+                    cell_date = first_day + timedelta(days=day_offset)
+                else:
+                    cell_date = last_day + timedelta(days=day_offset - total_days + 1)
+                is_this_month = False
 
-        is_weekend = cell_date.weekday() >= 5
-        is_today = cell_date == today
+            is_weekend = cell_date.weekday() >= 5
+            is_today = cell_date == today
 
-        cell_classes = ["cell"]
-        if not is_this_month:
-            cell_classes.append("other-month")
-        elif is_today:
-            cell_classes.append("today")
-        elif is_weekend:
-            cell_classes.append("weekend")
+            cell_classes = ["cell"]
+            if not is_this_month:
+                cell_classes.append("other-month")
+            elif is_today:
+                cell_classes.append("today")
+            elif is_weekend:
+                cell_classes.append("weekend")
 
-        day_num = str(cell_date.day)
-        num_classes = ["cell-num"]
-        if is_weekend and is_this_month:
-            num_classes.append("weekend-num")
-        if is_today:
-            num_classes.append("today-num")
+            day_num = str(cell_date.day)
+            num_classes = ["cell-num"]
+            if is_weekend and is_this_month:
+                num_classes.append("weekend-num")
+            if is_today:
+                num_classes.append("today-num")
 
-        events_html = ""
-        if is_this_month and cell_date in events_by_date:
-            events = events_by_date[cell_date]
-            for e in events[:4]:
-                category = e.get('category', '📌 ផ្សេងៗ')
-                color = CATEGORY_COLOR_MAP.get(category, "#00ACC1")
-                time_prefix = f"{e['time']} " if e['time'] else ""
-                event_text = e['event'][:25] + ("…" if len(e['event']) > 25 else "")
-                events_html += (f'<div class="mini-event" style="background:{color}">'
-                                f'{html_escape(time_prefix + event_text)}</div>')
-            if len(events) > 4:
-                events_html += f'<div class="more">+ {len(events)-4} ទៀត</div>'
+            events_html = ""
+            if is_this_month and cell_date in events_by_date:
+                events = events_by_date[cell_date]
+                for e in events[:4]:
+                    category = e.get('category', '📌 ផ្សេងៗ')
+                    color = CATEGORY_COLOR_MAP.get(category, "#00ACC1")
+                    time_prefix = f"{e['time']} " if e['time'] else ""
+                    event_text = e['event'][:22] + ("…" if len(e['event']) > 22 else "")
+                    events_html += (f'<div class="mini-event" style="background:{color}">'
+                                    f'{html_escape(time_prefix + event_text)}</div>')
+                if len(events) > 4:
+                    events_html += f'<div class="more">+ {len(events)-4} ទៀត</div>'
 
-        cells_html += f"""
-        <div class="{' '.join(cell_classes)}">
-            <div class="{' '.join(num_classes)}">{day_num}</div>
-            <div class="cell-events">{events_html}</div>
-        </div>
-        """
+            row_cells += f"""
+            <div class="{' '.join(cell_classes)}">
+                <div class="{' '.join(num_classes)}">{day_num}</div>
+                <div class="cell-events">{events_html}</div>
+            </div>
+            """
+
+        rows_html += f'<div class="grid-row">{row_cells}</div>'
 
     footer_time = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
 
@@ -1093,7 +1151,7 @@ def build_month_html(year, month, events_by_date, today):
 <head>
 <meta charset="UTF-8">
 <style>
-{FONT_CSS}
+{FONT_IMPORT}
 
 @page {{
     size: A4 landscape;
@@ -1102,70 +1160,89 @@ def build_month_html(year, month, events_by_date, today):
 
 * {{
     box-sizing: border-box;
-    font-family: 'Noto Sans Khmer', 'Noto Color Emoji', sans-serif;
     margin: 0;
     padding: 0;
+    letter-spacing: normal;
+    word-spacing: normal;
 }}
 
-body {{
+html, body {{
+    font-family: 'Noto Sans Khmer', 'Khmer OS', sans-serif;
     color: #202124;
 }}
 
+.cell-num, .wd-en, .header-count-num {{
+    font-family: 'Arial', 'Helvetica', sans-serif !important;
+    letter-spacing: 0 !important;
+}}
+
+/* Header */
 .header {{
     background-color: #4285F4;
     color: white;
-    padding: 18px;
+    padding: 20px;
     text-align: center;
     border-radius: 8px 8px 0 0;
 }}
 
-.header h1 {{
-    font-size: 24pt;
+.header-title {{
+    font-size: 26pt;
     font-weight: 700;
+    line-height: 1.2;
 }}
 
-.header .subtitle {{
-    font-size: 11pt;
-    margin-top: 5px;
+.header-subtitle {{
+    font-size: 12pt;
+    margin-top: 6px;
 }}
 
+/* Weekdays */
 .weekdays {{
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 2px;
+    display: table;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 2px;
     margin-top: 4px;
+    table-layout: fixed;
 }}
 
-.wd-header {{
+.wd-cell {{
+    display: table-cell;
     background-color: #4285F4;
     color: white;
-    padding: 8px;
+    padding: 10px 4px;
     text-align: center;
+    width: 14.28%;
 }}
 
 .wd-en {{
-    font-size: 10pt;
+    font-size: 11pt;
     font-weight: 700;
-    font-family: 'Helvetica', sans-serif;
+    line-height: 1.2;
 }}
 
 .wd-kh {{
-    font-size: 8pt;
-    margin-top: 2px;
+    font-size: 9pt;
+    margin-top: 3px;
 }}
 
-.grid {{
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 2px;
-    margin-top: 2px;
+/* Grid */
+.grid-row {{
+    display: table;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 2px;
+    table-layout: fixed;
 }}
 
 .cell {{
+    display: table-cell;
     background-color: white;
     border: 1px solid #DADCE0;
-    min-height: 100px;
+    height: 90px;
     padding: 6px;
+    vertical-align: top;
+    width: 14.28%;
 }}
 
 .cell.weekend {{
@@ -1181,11 +1258,12 @@ body {{
 }}
 
 .cell-num {{
-    font-size: 12pt;
+    font-size: 13pt;
     font-weight: 700;
     color: #202124;
     margin-bottom: 4px;
-    font-family: 'Helvetica', sans-serif;
+    display: inline-block;
+    line-height: 1;
 }}
 
 .cell-num.weekend-num {{
@@ -1193,15 +1271,14 @@ body {{
 }}
 
 .cell-num.today-num {{
-    display: inline-block;
     background-color: #4285F4;
     color: white;
-    width: 24px;
-    height: 24px;
-    line-height: 24px;
+    width: 26px;
+    height: 26px;
+    line-height: 26px;
     text-align: center;
     border-radius: 50%;
-    font-size: 10pt;
+    font-size: 11pt;
 }}
 
 .other-month .cell-num {{
@@ -1209,29 +1286,30 @@ body {{
 }}
 
 .cell-events {{
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    margin-top: 2px;
 }}
 
 .mini-event {{
     color: white;
-    font-size: 7pt;
-    padding: 2px 4px;
+    font-size: 7.5pt;
+    padding: 2px 5px;
     border-radius: 2px;
+    margin-bottom: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.3;
 }}
 
 .more {{
     font-size: 7pt;
     color: #5F6368;
     font-style: italic;
+    margin-top: 2px;
 }}
 
 .footer {{
-    margin-top: 8px;
+    margin-top: 10px;
     text-align: center;
     font-size: 8pt;
     color: #5F6368;
@@ -1240,17 +1318,15 @@ body {{
 </head>
 <body>
     <div class="header">
-        <h1>📅 {KHMER_MONTHS_NAMES[month]} {year}</h1>
-        <div class="subtitle">សរុប: {total} ព្រឹត្តិការណ៍</div>
+        <div class="header-title">{KHMER_MONTHS_NAMES[month]} {year}</div>
+        <div class="header-subtitle">សរុប៖ <span class="header-count-num">{total}</span> ព្រឹត្តិការណ៍</div>
     </div>
 
     <div class="weekdays">
         {weekdays_html}
     </div>
 
-    <div class="grid">
-        {cells_html}
-    </div>
+    {rows_html}
 
     <div class="footer">
         Voice Tracker Bot • {footer_time}
@@ -1295,7 +1371,6 @@ def generate_month_calendar_pdf(year=None, month=None):
     HTML(string=html_content).write_pdf(output)
     output.seek(0)
     return output
-
 
 # ══════════════════════════════════════
 # Confirmation UI
