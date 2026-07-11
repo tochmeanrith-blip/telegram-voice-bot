@@ -914,7 +914,7 @@ body {{
 .event-text {{
     font-size: 8.5pt;
     line-height: 1.35;
-    word-break: break-word;
+    word-wrap: break-word;
     overflow-wrap: break-word;
 }}
 
