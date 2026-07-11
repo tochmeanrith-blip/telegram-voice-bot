@@ -27,6 +27,7 @@ from telegram.ext import (
 )
 from flask import Flask, Response
 
+# PDF
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.colors import HexColor, white, black
 from reportlab.pdfgen import canvas
@@ -35,8 +36,6 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.units import mm, cm
 
 from khmer_font import get_khmer_font
-
-
 
 # ══════════════════════════════════════
 # Environment Variables
@@ -106,7 +105,7 @@ try:
     header = worksheet.row_values(1)
     if not header or header != HEADERS:
         worksheet.update("A1:H1", [HEADERS])
-        logger.info("✅ Headers updated to v3.0")
+        logger.info("✅ Headers updated to v3.1")
 except Exception as e:
     logger.error(f"Header error: {e}")
 
@@ -275,7 +274,6 @@ def delete_row(row_num):
     all_values = worksheet.get_all_values()
     for idx, row in enumerate(all_values[1:], start=2):
         if row and str(row[0]) == str(row_num):
-            # Delete from Google Calendar first
             gcal_id = row[7] if len(row) > 7 else ""
             if gcal_id:
                 try:
@@ -286,7 +284,7 @@ def delete_row(row_num):
                     logger.info(f"Deleted gcal: {gcal_id}")
                 except Exception as e:
                     logger.warning(f"Gcal delete failed: {e}")
-            
+
             worksheet.delete_rows(idx)
             renumber_rows()
             return True
@@ -294,7 +292,7 @@ def delete_row(row_num):
 
 
 def edit_row(row_num, field, new_value):
-    """Edit field: date(2), time(3), event(4), category(5), status(6)"""
+    """Edit field"""
     field_map = {"date": 2, "time": 3, "event": 4, "category": 5, "status": 6}
     col = field_map.get(field)
     if not col:
@@ -637,226 +635,6 @@ def extract_from_image(file_path):
 
 
 # ══════════════════════════════════════
-# Calendar Image Generation
-# ══════════════════════════════════════
-
-def wrap_text(text, font, max_width, draw):
-    lines = []
-    current_line = ""
-    for char in list(text):
-        test_line = current_line + char
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        if (bbox[2] - bbox[0]) <= max_width:
-            current_line = test_line
-        else:
-            if current_line:
-                lines.append(current_line)
-            current_line = char
-    if current_line:
-        lines.append(current_line)
-    return lines
-
-
-def generate_week_calendar(start_date=None):
-    if start_date is None:
-        today = datetime.now(TZ).date()
-        start_date = today - timedelta(days=today.weekday())
-
-    week_dates = [start_date + timedelta(days=i) for i in range(7)]
-
-    all_events = get_all_events()
-    events_by_date = defaultdict(list)
-    for e in all_events:
-        try:
-            d = datetime.strptime(e['date'], "%Y-%m-%d").date()
-            if start_date <= d <= start_date + timedelta(days=6):
-                events_by_date[d].append(e)
-        except Exception:
-            pass
-
-    for d in events_by_date:
-        events_by_date[d].sort(
-            key=lambda x: (x['time'] or "99:99",
-                           int(x['id']) if str(x['id']).isdigit() else 0)
-        )
-
-    font_path = get_khmer_font()
-    try:
-        font_title = ImageFont.truetype(font_path, 38)
-        font_subtitle = ImageFont.truetype(font_path, 24)
-        font_date = ImageFont.truetype(font_path, 32)
-        font_day = ImageFont.truetype(font_path, 20)
-        font_event = ImageFont.truetype(font_path, 16)
-        font_time = ImageFont.truetype(font_path, 14)
-        font_id = ImageFont.truetype(font_path, 12)
-        font_small = ImageFont.truetype(font_path, 14)
-    except Exception:
-        font_title = font_subtitle = font_date = font_day = font_event = font_time = font_id = font_small = ImageFont.load_default()
-
-    WIDTH = 1800
-    HEADER_H = 130
-    DAY_HEADER_H = 110
-    COL_W = WIDTH // 7
-    EVENT_PADDING = 10
-    EVENT_LINE_HEIGHT = 21
-    EVENT_MIN_HEIGHT = 60
-    EVENT_GAP = 8
-
-    max_content_h = 0
-    temp_img = Image.new("RGB", (100, 100))
-    temp_draw = ImageDraw.Draw(temp_img)
-
-    for d in week_dates:
-        events = events_by_date[d]
-        total_h = 0
-        for e in events:
-            text_max_w = COL_W - (EVENT_PADDING * 2) - 20
-            lines = wrap_text(e['event'], font_event, text_max_w, temp_draw)
-            box_h = 40 + (len(lines) * EVENT_LINE_HEIGHT) + 10
-            total_h += max(box_h, EVENT_MIN_HEIGHT) + EVENT_GAP
-        if total_h > max_content_h:
-            max_content_h = total_h
-
-    CONTENT_H = max(max_content_h + 30, 500)
-    FOOTER_H = 40
-    HEIGHT = HEADER_H + DAY_HEADER_H + CONTENT_H + FOOTER_H
-
-    BG = (245, 247, 250)
-    HEADER_BG = (66, 133, 244)
-    WEEKEND_BG = (255, 243, 224)
-    TODAY_BG = (232, 240, 254)
-    BORDER = (218, 220, 224)
-    TEXT_DARK = (32, 33, 36)
-    TEXT_GRAY = (95, 99, 104)
-    TEXT_WHITE = (255, 255, 255)
-    STATUS_COLORS = {
-        STATUS_PENDING: (255, 152, 0),
-        STATUS_DONE: (76, 175, 80),
-        STATUS_CANCEL: (158, 158, 158),
-    }
-    EVENT_COLORS = [
-        (52, 168, 83), (251, 188, 5), (234, 67, 53),
-        (156, 39, 176), (0, 172, 193), (255, 112, 67),
-    ]
-
-    img = Image.new("RGB", (WIDTH, HEIGHT), BG)
-    draw = ImageDraw.Draw(img)
-
-    draw.rectangle([0, 0, WIDTH, HEADER_H], fill=HEADER_BG)
-    end_date = start_date + timedelta(days=6)
-    title = "📅 កាលវិភាគសប្តាហ៍"
-    subtitle = (f"{start_date.day} {KHMER_MONTHS_NAMES[start_date.month]} - "
-                f"{end_date.day} {KHMER_MONTHS_NAMES[end_date.month]} {end_date.year}")
-    draw.text((30, 25), title, font=font_title, fill=TEXT_WHITE)
-    draw.text((30, 78), subtitle, font=font_subtitle, fill=TEXT_WHITE)
-
-    total = sum(len(events_by_date[d]) for d in week_dates)
-    count_text = f"សរុប: {total} ព្រឹត្តិការណ៍"
-    bbox = draw.textbbox((0, 0), count_text, font=font_subtitle)
-    draw.text((WIDTH - (bbox[2] - bbox[0]) - 30, 50), count_text,
-              font=font_subtitle, fill=TEXT_WHITE)
-
-    today = datetime.now(TZ).date()
-    for i, d in enumerate(week_dates):
-        x = i * COL_W
-        y = HEADER_H
-
-        is_weekend = d.weekday() >= 5
-        is_today = d == today
-
-        if is_today:
-            bg = TODAY_BG
-        elif is_weekend:
-            bg = WEEKEND_BG
-        else:
-            bg = (255, 255, 255)
-
-        draw.rectangle([x, y, x + COL_W, HEIGHT - FOOTER_H], fill=bg)
-        draw.line([x, y, x, HEIGHT - FOOTER_H], fill=BORDER, width=1)
-
-        day_short = WEEKDAY_SHORT[d.weekday()]
-        day_khmer = WEEKDAY_NAMES[d.weekday()]
-
-        header_color = (234, 67, 53) if is_weekend else TEXT_GRAY
-        if is_today:
-            header_color = HEADER_BG
-
-        bbox = draw.textbbox((0, 0), day_short, font=font_day)
-        w = bbox[2] - bbox[0]
-        draw.text((x + (COL_W - w) // 2, y + 12), day_short,
-                  font=font_day, fill=header_color)
-
-        day_num = str(d.day)
-        bbox = draw.textbbox((0, 0), day_num, font=font_date)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-
-        if is_today:
-            cx = x + COL_W // 2
-            cy = y + 60
-            r = 28
-            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=HEADER_BG)
-            draw.text((cx - w // 2, cy - h // 2 - 3), day_num,
-                      font=font_date, fill=TEXT_WHITE)
-        else:
-            draw.text((x + (COL_W - w) // 2, y + 42), day_num,
-                      font=font_date, fill=TEXT_DARK)
-
-        bbox = draw.textbbox((0, 0), day_khmer, font=font_small)
-        w = bbox[2] - bbox[0]
-        draw.text((x + (COL_W - w) // 2, y + 88), day_khmer,
-                  font=font_small, fill=TEXT_GRAY)
-
-        events = events_by_date[d]
-        event_y = y + DAY_HEADER_H + 10
-
-        for j, e in enumerate(events):
-            color = EVENT_COLORS[j % len(EVENT_COLORS)]
-            if STATUS_DONE in e.get('status', ''):
-                color = STATUS_COLORS[STATUS_DONE]
-            elif STATUS_CANCEL in e.get('status', ''):
-                color = STATUS_COLORS[STATUS_CANCEL]
-
-            box_x = x + 8
-            box_w = COL_W - 16
-            text_max_w = box_w - (EVENT_PADDING * 2)
-            lines = wrap_text(e['event'], font_event, text_max_w, draw)
-
-            box_h = 40 + (len(lines) * EVENT_LINE_HEIGHT) + 10
-            box_h = max(box_h, EVENT_MIN_HEIGHT)
-
-            draw.rectangle([box_x, event_y, box_x + box_w, event_y + box_h],
-                           fill=color)
-
-            id_text = f"#{e['id']}"
-            time_text = f"🕐 {e['time']}" if e['time'] else ""
-            draw.text((box_x + EVENT_PADDING, event_y + 5), id_text,
-                      font=font_id, fill=TEXT_WHITE)
-            if time_text:
-                bbox = draw.textbbox((0, 0), time_text, font=font_time)
-                tw = bbox[2] - bbox[0]
-                draw.text((box_x + box_w - tw - EVENT_PADDING, event_y + 4),
-                          time_text, font=font_time, fill=TEXT_WHITE)
-
-            text_y = event_y + 22
-            for line in lines:
-                draw.text((box_x + EVENT_PADDING, text_y), line,
-                          font=font_event, fill=TEXT_WHITE)
-                text_y += EVENT_LINE_HEIGHT
-
-            event_y += box_h + EVENT_GAP
-
-    footer_y = HEIGHT - 28
-    footer_text = f"Voice Tracker Bot v3.0 • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
-    draw.text((30, footer_y), footer_text, font=font_small, fill=TEXT_GRAY)
-
-    output = BytesIO()
-    img.save(output, format="PNG", quality=95)
-    output.seek(0)
-    return output
-
-
-# ══════════════════════════════════════
 # ICS Export
 # ══════════════════════════════════════
 
@@ -904,6 +682,7 @@ def generate_ics(events):
     lines.append("END:VCALENDAR")
     return "\n".join(lines).encode("utf-8")
 
+
 # ══════════════════════════════════════
 # 📄 PDF Calendar Generator
 # ══════════════════════════════════════
@@ -929,6 +708,7 @@ def register_khmer_font_pdf():
 
 
 def wrap_pdf_text(text, max_chars_per_line=25):
+    """Wrap text ជាបន្ទាត់ៗ"""
     if not text:
         return [""]
     lines = []
@@ -1028,7 +808,7 @@ def generate_week_calendar_pdf(start_date=None):
 
     today = datetime.now(TZ).date()
     columns_y_top = PAGE_H - HEADER_H - 5 * mm
-    columns_bottom = MARGIN + 10 * mm
+    columns_bottom = MARGIN + 15 * mm
 
     for i, d in enumerate(week_dates):
         col_x = content_x + i * (col_w + COL_GAP)
@@ -1128,7 +908,7 @@ def generate_week_calendar_pdf(start_date=None):
                 c.setFont('Helvetica-Bold', 7)
                 c.drawRightString(box_x + box_w - 2 * mm,
                                   box_y + box_h - 3.5 * mm,
-                                  f"🕐 {e['time']}")
+                                  f"{e['time']}")
 
             c.setFont(KHMER, 7.5)
             text_y = box_y + box_h - 7 * mm
@@ -1353,6 +1133,7 @@ def generate_month_calendar_pdf(year=None, month=None):
     output.seek(0)
     return output
 
+
 # ══════════════════════════════════════
 # Confirmation UI
 # ══════════════════════════════════════
@@ -1429,7 +1210,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = query.data.split(":")
     action = parts[0]
 
-    # Status change (from /status command)
+    # Status change
     if action == "setstatus":
         row_num = parts[1]
         status_key = parts[2]
@@ -1454,7 +1235,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = pending_events[chat_id]
 
     if action == "save":
-        # Save to Sheet
         row_num = save_to_sheet(
             data['date'], data['time'], data['event'], data['category']
         )
@@ -1483,7 +1263,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     gid = push_to_google_calendar(
                         next_date.strftime("%Y-%m-%d"),
-                        data['time'], data['event'], category_name
+                        data['time'], data['event'],
+                        CATEGORIES.get(data['category'], CATEGORIES["other"])
                     )
                     if gid:
                         update_gcal_id(new_row, gid)
@@ -1547,7 +1328,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
-        "🎙️ *Voice Tracker Bot v3.0*\n\n"
+        "🎙️ *Voice Tracker Bot v3.1*\n\n"
         "📌 *របៀបប្រើ:*\n"
         "🎤 ផ្ញើសំឡេងខ្មែរ\n"
         "📸 ផ្ញើរូបភាព\n"
@@ -1647,6 +1428,37 @@ async def nextweek_command(update, context):
         )
     except Exception as e:
         logger.error(f"NextWeek PDF error: {e}")
+        await update.message.reply_text(f"❌ {e}")
+
+
+async def month_command(update, context):
+    """PDF Calendar ខែនេះ"""
+    await update.message.reply_text("📄 កំពុងបង្កើត PDF ខែ...")
+    try:
+        now = datetime.now(TZ)
+        year = now.year
+        month = now.month
+        if context.args:
+            try:
+                parts = context.args[0].split("-")
+                year = int(parts[0])
+                month = int(parts[1])
+            except Exception:
+                pass
+
+        loop = asyncio.get_event_loop()
+        pdf_bytes = await loop.run_in_executor(
+            None, generate_month_calendar_pdf, year, month
+        )
+        pdf_bytes.name = f"month_{year}_{month:02d}.pdf"
+        caption = f"📅 *កាលវិភាគខែ {KHMER_MONTHS_NAMES[month]} {year}*"
+        await update.message.reply_document(
+            document=InputFile(pdf_bytes, filename=pdf_bytes.name),
+            caption=caption,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Month PDF error: {e}")
         await update.message.reply_text(f"❌ {e}")
 
 
@@ -1865,36 +1677,7 @@ async def export_command(update, context):
         await update.message.reply_text(f"❌ {e}")
 
 
-async def month_command(update, context):
-    """PDF Calendar ខែនេះ"""
-    await update.message.reply_text("📄 កំពុងបង្កើត PDF ខែ...")
-    try:
-        now = datetime.now(TZ)
-        year = now.year
-        month = now.month
-        if context.args:
-            try:
-                parts = context.args[0].split("-")
-                year = int(parts[0])
-                month = int(parts[1])
-            except Exception:
-                pass
-
-        loop = asyncio.get_event_loop()
-        pdf_bytes = await loop.run_in_executor(
-            None, generate_month_calendar_pdf, year, month
-        )
-        pdf_bytes.name = f"month_{year}_{month:02d}.pdf"
-        caption = f"📅 *កាលវិភាគខែ {KHMER_MONTHS_NAMES[month]} {year}*"
-        await update.message.reply_document(
-            document=InputFile(pdf_bytes, filename=pdf_bytes.name),
-            caption=caption,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logger.error(f"Month PDF error: {e}")
-        await update.message.reply_text(f"❌ {e}")
-
+async def sync_command(update, context):
     """Manual sync ពី Google Calendar"""
     await update.message.reply_text("🔄 កំពុង sync ពី Google Calendar...")
     try:
@@ -2081,7 +1864,6 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
 
                 diff_min = (event_dt - now).total_seconds() / 60
 
-                # 24h before (±30 min)
                 if 1410 <= diff_min <= 1470:
                     msg = (f"🔔 *រំលឹក ១ ថ្ងៃមុន*\n\n"
                            f"📅 {e['date']} {e['time']}\n"
@@ -2089,7 +1871,6 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
                            f"🏷 {e['category']}")
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg,
                                                    parse_mode="Markdown")
-                # 1h before (±30 min)
                 elif 30 <= diff_min <= 90:
                     msg = (f"⏰ *រំលឹក ១ ម៉ោងមុន*\n\n"
                            f"📅 {e['date']} {e['time']}\n"
@@ -2130,17 +1911,17 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "🤖 Voice Tracker Bot v3.0 is running!"
+    return "🤖 Voice Tracker Bot v3.1 is running!"
 
 
 @flask_app.route("/health")
 def health():
-    return {"status": "ok", "version": "3.0"}
+    return {"status": "ok", "version": "3.1"}
 
 
 @flask_app.route("/calendar/<secret>")
 def calendar_feed(secret):
-    """Public .ics feed (for Calendar subscription)"""
+    """Public .ics feed"""
     if secret != CALENDAR_SECRET:
         return "Unauthorized", 401
     try:
@@ -2168,7 +1949,7 @@ def run_flask():
 # ══════════════════════════════════════
 
 def run_bot():
-    logger.info("🚀 Starting Bot v3.0...")
+    logger.info("🚀 Starting Bot v3.1...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Commands
@@ -2177,6 +1958,7 @@ def run_bot():
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("nextweek", nextweek_command))
+    app.add_handler(CommandHandler("month", month_command))
     app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("calendar", calendar_command))
@@ -2186,7 +1968,6 @@ def run_bot():
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("sort", sort_command))
     app.add_handler(CommandHandler("export", export_command))
-​​    app.add_handler(CommandHandler("month", month_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
@@ -2201,7 +1982,6 @@ def run_bot():
     # Jobs
     job_queue = app.job_queue
 
-    # Weekly reminder (Friday 8 AM)
     reminder_time = dtime(hour=8, minute=0, tzinfo=TZ)
     job_queue.run_daily(
         send_weekly_reminder, time=reminder_time, days=(4,),
@@ -2209,21 +1989,19 @@ def run_bot():
     )
     logger.info("📅 Weekly reminder: Friday 8:00 AM")
 
-    # Personal reminders every 30 min
     job_queue.run_repeating(
         send_personal_reminders, interval=1800, first=60,
         name="personal_reminders"
     )
     logger.info("⏰ Personal reminders: Every 30 min")
 
-    # Google Calendar sync every 15 min
     job_queue.run_repeating(
         sync_calendar_job, interval=900, first=30,
         name="calendar_sync"
     )
     logger.info("🔄 Google Calendar sync: Every 15 min")
 
-    logger.info("✅ Bot v3.0 is running!")
+    logger.info("✅ Bot v3.1 is running!")
     app.run_polling(drop_pending_updates=True)
 
 
