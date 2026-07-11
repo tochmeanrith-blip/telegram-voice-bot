@@ -11,7 +11,6 @@ from io import BytesIO
 from difflib import SequenceMatcher
 
 import pytz
-from PIL import Image, ImageDraw, ImageFont
 from google import genai
 from google.genai import types
 import gspread
@@ -27,15 +26,8 @@ from telegram.ext import (
 )
 from flask import Flask, Response
 
-# PDF
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.colors import HexColor, white, black
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.units import mm, cm
-
-from khmer_font import get_khmer_font
+# WeasyPrint សម្រាប់ PDF
+from weasyprint import HTML
 
 # ══════════════════════════════════════
 # Environment Variables
@@ -105,7 +97,7 @@ try:
     header = worksheet.row_values(1)
     if not header or header != HEADERS:
         worksheet.update("A1:H1", [HEADERS])
-        logger.info("✅ Headers updated to v3.1")
+        logger.info("✅ Headers updated to v3.2")
 except Exception as e:
     logger.error(f"Header error: {e}")
 
@@ -144,7 +136,6 @@ STATUS_PENDING = "⏳ រង់ចាំ"
 STATUS_DONE = "✅ រួចរាល់"
 STATUS_CANCEL = "❌ បោះបង់"
 
-# Pending confirmations
 pending_events = {}
 
 
@@ -157,7 +148,6 @@ def similarity(a, b):
 
 
 def detect_category(text):
-    """Auto-detect category from text"""
     text_lower = text.lower()
     if any(w in text_lower for w in ["meeting", "ប្រជុំ", "work", "office", "ការងារ", "deadline"]):
         return "work"
@@ -172,12 +162,23 @@ def detect_category(text):
     return "other"
 
 
+def html_escape(text):
+    """Escape HTML special chars"""
+    if not text:
+        return ""
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;"))
+
+
 # ══════════════════════════════════════
 # AI Parser
 # ══════════════════════════════════════
 
 def parse_with_ai(text):
-    """Parse Khmer text ជាមួយ Gemini"""
     try:
         today = datetime.now(TZ).strftime("%Y-%m-%d")
         weekday_today = WEEKDAY_NAMES[datetime.now(TZ).weekday()]
@@ -255,7 +256,6 @@ JSON:"""
 # ══════════════════════════════════════
 
 def save_to_sheet(date_str, time_str, event, category_key, gcal_id=""):
-    """Save event ចូល Sheet"""
     now = datetime.now(TZ)
     created = now.strftime("%Y-%m-%d %H:%M:%S")
     all_values = worksheet.get_all_values()
@@ -270,7 +270,6 @@ def save_to_sheet(date_str, time_str, event, category_key, gcal_id=""):
 
 
 def delete_row(row_num):
-    """លុប row + លុប Google Calendar event"""
     all_values = worksheet.get_all_values()
     for idx, row in enumerate(all_values[1:], start=2):
         if row and str(row[0]) == str(row_num):
@@ -292,7 +291,6 @@ def delete_row(row_num):
 
 
 def edit_row(row_num, field, new_value):
-    """Edit field"""
     field_map = {"date": 2, "time": 3, "event": 4, "category": 5, "status": 6}
     col = field_map.get(field)
     if not col:
@@ -312,7 +310,6 @@ def renumber_rows():
 
 
 def update_gcal_id(row_num, gcal_id):
-    """Update Column H (GCal_ID)"""
     all_values = worksheet.get_all_values()
     for idx, row in enumerate(all_values[1:], start=2):
         if row and str(row[0]) == str(row_num):
@@ -322,7 +319,6 @@ def update_gcal_id(row_num, gcal_id):
 
 
 def get_all_events():
-    """ទាញ events ទាំងអស់"""
     all_values = worksheet.get_all_values()
     events = []
     for row in all_values[1:]:
@@ -341,7 +337,6 @@ def get_all_events():
 
 
 def sort_sheet_by_date():
-    """Sort sheet by date ascending"""
     try:
         all_values = worksheet.get_all_values()
         if len(all_values) <= 1:
@@ -364,7 +359,6 @@ def sort_sheet_by_date():
 
 
 def find_duplicates(date_str, event, threshold=0.75):
-    """Detect similar events same date"""
     events = get_all_events()
     return [
         e for e in events
@@ -384,7 +378,6 @@ def search_events(keyword):
 # ══════════════════════════════════════
 
 def get_calendar_events(days_back=7, days_forward=90):
-    """ទាញ events ពី Google Calendar"""
     try:
         now = datetime.now(TZ)
         time_min = (now - timedelta(days=days_back)).isoformat()
@@ -409,7 +402,6 @@ def get_calendar_events(days_back=7, days_forward=90):
 
 
 def parse_gcal_event(gcal_event):
-    """Parse Google Calendar event → dict"""
     try:
         gcal_id = gcal_event.get('id', '')
         summary = gcal_event.get('summary', '(គ្មានចំណងជើង)')
@@ -442,7 +434,6 @@ def parse_gcal_event(gcal_event):
 
 
 def get_synced_gcal_ids():
-    """List of synced GCal IDs from Sheet"""
     try:
         all_values = worksheet.get_all_values()
         return {row[7] for row in all_values[1:] if len(row) > 7 and row[7]}
@@ -451,7 +442,6 @@ def get_synced_gcal_ids():
 
 
 def save_gcal_to_sheet(gcal_data):
-    """Save gcal event ចូល Sheet"""
     return save_to_sheet(
         gcal_data['date'],
         gcal_data['time'],
@@ -462,7 +452,6 @@ def save_gcal_to_sheet(gcal_data):
 
 
 def update_sheet_from_gcal(gcal_id, gcal_data):
-    """Update row from gcal changes"""
     try:
         all_values = worksheet.get_all_values()
         for idx, row in enumerate(all_values[1:], start=2):
@@ -481,7 +470,6 @@ def update_sheet_from_gcal(gcal_id, gcal_data):
 
 
 def sync_from_google_calendar():
-    """Pull events ពី Google Calendar → Sheet"""
     try:
         logger.info("🔄 Syncing from Google Calendar...")
         gcal_events = get_calendar_events()
@@ -513,7 +501,6 @@ def sync_from_google_calendar():
 
 
 def push_to_google_calendar(date_str, time_str, event, category):
-    """Push event ទៅ Google Calendar"""
     try:
         if time_str:
             start_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
@@ -639,7 +626,6 @@ def extract_from_image(file_path):
 # ══════════════════════════════════════
 
 def generate_ics(events):
-    """Generate .ics calendar file"""
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -684,48 +670,315 @@ def generate_ics(events):
 
 
 # ══════════════════════════════════════
-# 📄 PDF Calendar Generator
+# 📄 PDF Calendar Generator (WeasyPrint)
 # ══════════════════════════════════════
 
-KHMER_FONT_REGISTERED = False
+CATEGORY_COLOR_MAP = {
+    "🏢 ការងារ": "#4285F4",
+    "👨‍👩‍👧 គ្រួសារ": "#EA4335",
+    "💊 សុខភាព": "#34A853",
+    "🎉 ព្រឹត្តិការណ៍": "#FBBC04",
+    "📚 សិក្សា": "#9C27B0",
+    "📌 ផ្សេងៗ": "#00ACC1",
+}
+
+FONT_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;500;700&family=Noto+Color+Emoji&display=swap');
+"""
 
 
-def register_khmer_font_pdf():
-    """Register Khmer font for ReportLab"""
-    global KHMER_FONT_REGISTERED
-    if KHMER_FONT_REGISTERED:
-        return True
-    try:
-        font_path = get_khmer_font()
-        if font_path and os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont('Khmer', font_path))
-            KHMER_FONT_REGISTERED = True
-            logger.info("✅ Khmer font registered for PDF")
-            return True
-    except Exception as e:
-        logger.error(f"Font register error: {e}")
-    return False
+def build_week_html(start_date, week_dates, events_by_date, today):
+    """Build HTML for Week Calendar"""
+    end_date = start_date + timedelta(days=6)
+    total = sum(len(events_by_date[d]) for d in week_dates)
+    subtitle = (f"{start_date.day} {KHMER_MONTHS_NAMES[start_date.month]} - "
+                f"{end_date.day} {KHMER_MONTHS_NAMES[end_date.month]} {end_date.year}")
 
+    columns_html = ""
+    for d in week_dates:
+        is_weekend = d.weekday() >= 5
+        is_today = d == today
 
-def wrap_pdf_text(text, max_chars_per_line=25):
-    """Wrap text ជាបន្ទាត់ៗ"""
-    if not text:
-        return [""]
-    lines = []
-    current = ""
-    for char in text:
-        if len(current) >= max_chars_per_line:
-            lines.append(current)
-            current = char
-        else:
-            current += char
-    if current:
-        lines.append(current)
-    return lines
+        col_classes = ["day-col"]
+        if is_today:
+            col_classes.append("today")
+        elif is_weekend:
+            col_classes.append("weekend")
+
+        day_short = WEEKDAY_SHORT[d.weekday()]
+        day_khmer = WEEKDAY_NAMES[d.weekday()]
+        day_num = str(d.day)
+
+        wd_class = ""
+        if is_weekend:
+            wd_class = "weekend-text"
+        elif is_today:
+            wd_class = "today-text"
+
+        day_num_html = (f'<div class="day-num today-circle">{day_num}</div>'
+                        if is_today
+                        else f'<div class="day-num">{day_num}</div>')
+
+        events_html = ""
+        for e in events_by_date[d]:
+            category = e.get('category', '📌 ផ្សេងៗ')
+            color = CATEGORY_COLOR_MAP.get(category, "#00ACC1")
+
+            status = e.get('status', '')
+            extra_style = ""
+            if STATUS_DONE in status:
+                color = "#34A853"
+                extra_style = "opacity: 0.75;"
+            elif STATUS_CANCEL in status:
+                color = "#9E9E9E"
+                extra_style = "opacity: 0.5; text-decoration: line-through;"
+
+            time_html = (f'<span class="event-time">{html_escape(e["time"])}</span>'
+                         if e['time'] else "")
+
+            events_html += f"""
+            <div class="event" style="background-color: {color}; {extra_style}">
+                <div class="event-header">
+                    <span class="event-id">#{html_escape(e['id'])}</span>
+                    {time_html}
+                </div>
+                <div class="event-text">{html_escape(e['event'])}</div>
+            </div>
+            """
+
+        columns_html += f"""
+        <div class="{' '.join(col_classes)}">
+            <div class="day-header">
+                <div class="weekday-en {wd_class}">{day_short}</div>
+                {day_num_html}
+                <div class="weekday-kh">{day_khmer}</div>
+            </div>
+            <div class="events">
+                {events_html}
+            </div>
+        </div>
+        """
+
+    footer_time = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+{FONT_CSS}
+
+@page {{
+    size: A4 landscape;
+    margin: 8mm;
+}}
+
+* {{
+    box-sizing: border-box;
+    font-family: 'Noto Sans Khmer', 'Noto Color Emoji', sans-serif;
+    margin: 0;
+    padding: 0;
+}}
+
+body {{
+    color: #202124;
+    font-size: 10pt;
+}}
+
+.header {{
+    background-color: #4285F4;
+    color: white;
+    padding: 18px 22px;
+    border-radius: 8px 8px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}}
+
+.header-left h1 {{
+    font-size: 22pt;
+    font-weight: 700;
+    margin-bottom: 5px;
+}}
+
+.header-left .subtitle {{
+    font-size: 12pt;
+    font-weight: 400;
+    opacity: 0.95;
+}}
+
+.header-right {{
+    font-size: 11pt;
+    text-align: right;
+    font-weight: 500;
+}}
+
+.grid {{
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    margin-top: 4px;
+}}
+
+.day-col {{
+    background-color: white;
+    border: 1px solid #DADCE0;
+    border-radius: 6px;
+    min-height: 460px;
+    padding: 8px 6px;
+}}
+
+.day-col.weekend {{
+    background-color: #FFF3E0;
+}}
+
+.day-col.today {{
+    background-color: #E3F2FD;
+}}
+
+.day-header {{
+    text-align: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #DADCE0;
+    margin-bottom: 8px;
+}}
+
+.weekday-en {{
+    font-size: 9pt;
+    font-weight: 700;
+    color: #5F6368;
+    letter-spacing: 1px;
+    font-family: 'Helvetica', sans-serif;
+}}
+
+.weekday-en.weekend-text {{
+    color: #EA4335;
+}}
+
+.weekday-en.today-text {{
+    color: #4285F4;
+}}
+
+.day-num {{
+    font-size: 20pt;
+    font-weight: 700;
+    color: #202124;
+    margin: 4px 0;
+    font-family: 'Helvetica', sans-serif;
+}}
+
+.day-num.today-circle {{
+    display: inline-block;
+    background-color: #4285F4;
+    color: white;
+    width: 40px;
+    height: 40px;
+    line-height: 40px;
+    border-radius: 50%;
+    font-size: 16pt;
+}}
+
+.weekday-kh {{
+    font-size: 9pt;
+    color: #5F6368;
+    margin-top: 2px;
+}}
+
+.events {{
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}}
+
+.event {{
+    color: white;
+    border-radius: 4px;
+    padding: 5px 7px;
+    font-size: 8pt;
+    line-height: 1.4;
+    page-break-inside: avoid;
+    word-wrap: break-word;
+}}
+
+.event-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3px;
+    font-size: 7pt;
+    font-weight: 700;
+    opacity: 0.95;
+    font-family: 'Helvetica', sans-serif;
+}}
+
+.event-text {{
+    font-size: 8.5pt;
+    line-height: 1.35;
+    word-break: break-word;
+}}
+
+.footer {{
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 8pt;
+    color: #5F6368;
+    padding: 0 5px;
+}}
+
+.legend {{
+    display: flex;
+    gap: 14px;
+}}
+
+.legend-item {{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}}
+
+.legend-color {{
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    display: inline-block;
+}}
+</style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>📅 កាលវិភាគសប្តាហ៍</h1>
+            <div class="subtitle">{subtitle}</div>
+        </div>
+        <div class="header-right">
+            សរុប: {total} ព្រឹត្តិការណ៍
+        </div>
+    </div>
+
+    <div class="grid">
+        {columns_html}
+    </div>
+
+    <div class="footer">
+        <div class="legend">
+            <div class="legend-item"><span class="legend-color" style="background:#4285F4"></span>ការងារ</div>
+            <div class="legend-item"><span class="legend-color" style="background:#EA4335"></span>គ្រួសារ</div>
+            <div class="legend-item"><span class="legend-color" style="background:#34A853"></span>សុខភាព</div>
+            <div class="legend-item"><span class="legend-color" style="background:#FBBC04"></span>ព្រឹត្តិការណ៍</div>
+            <div class="legend-item"><span class="legend-color" style="background:#9C27B0"></span>សិក្សា</div>
+        </div>
+        <div>Voice Tracker Bot • {footer_time}</div>
+    </div>
+</body>
+</html>
+"""
+    return html
 
 
 def generate_week_calendar_pdf(start_date=None):
-    """PDF Calendar សប្តាហ៍មួយ (A4 Landscape)"""
+    """Generate Week PDF using WeasyPrint"""
     if start_date is None:
         today = datetime.now(TZ).date()
         start_date = today - timedelta(days=today.weekday())
@@ -748,208 +1001,267 @@ def generate_week_calendar_pdf(start_date=None):
                            int(x['id']) if str(x['id']).isdigit() else 0)
         )
 
-    has_khmer = register_khmer_font_pdf()
-    KHMER = 'Khmer' if has_khmer else 'Helvetica'
+    today = datetime.now(TZ).date()
+    html_content = build_week_html(start_date, week_dates, events_by_date, today)
 
     output = BytesIO()
-    PAGE = landscape(A4)
-    PAGE_W, PAGE_H = PAGE
-    c = canvas.Canvas(output, pagesize=PAGE)
-
-    COLOR_HEADER = HexColor("#4285F4")
-    COLOR_HEADER_TEXT = HexColor("#FFFFFF")
-    COLOR_WEEKEND = HexColor("#FFF3E0")
-    COLOR_TODAY = HexColor("#E3F2FD")
-    COLOR_BORDER = HexColor("#DADCE0")
-    COLOR_TEXT_DARK = HexColor("#202124")
-    COLOR_TEXT_GRAY = HexColor("#5F6368")
-    COLOR_TEXT_RED = HexColor("#EA4335")
-
-    CATEGORY_COLORS = {
-        "🏢 ការងារ": HexColor("#4285F4"),
-        "👨‍👩‍👧 គ្រួសារ": HexColor("#EA4335"),
-        "💊 សុខភាព": HexColor("#34A853"),
-        "🎉 ព្រឹត្តិការណ៍": HexColor("#FBBC04"),
-        "📚 សិក្សា": HexColor("#9C27B0"),
-        "📌 ផ្សេងៗ": HexColor("#00ACC1"),
-    }
-
-    STATUS_COLORS_PDF = {
-        STATUS_DONE: HexColor("#34A853"),
-        STATUS_CANCEL: HexColor("#9E9E9E"),
-    }
-
-    MARGIN = 15 * mm
-    HEADER_H = 40 * mm
-    DAY_HEADER_H = 22 * mm
-    COL_GAP = 2 * mm
-
-    content_x = MARGIN
-    content_w = PAGE_W - (2 * MARGIN)
-    col_w = (content_w - (6 * COL_GAP)) / 7
-
-    # Header
-    c.setFillColor(COLOR_HEADER)
-    c.rect(0, PAGE_H - HEADER_H, PAGE_W, HEADER_H, fill=1, stroke=0)
-    c.setFillColor(COLOR_HEADER_TEXT)
-    c.setFont(KHMER, 22)
-    c.drawString(MARGIN, PAGE_H - 18 * mm, "📅 កាលវិភាគសប្តាហ៍")
-
-    end_date = start_date + timedelta(days=6)
-    subtitle = (f"{start_date.day} {KHMER_MONTHS_NAMES[start_date.month]} - "
-                f"{end_date.day} {KHMER_MONTHS_NAMES[end_date.month]} {end_date.year}")
-    c.setFont(KHMER, 14)
-    c.drawString(MARGIN, PAGE_H - 30 * mm, subtitle)
-
-    total = sum(len(events_by_date[d]) for d in week_dates)
-    c.setFont(KHMER, 12)
-    c.drawRightString(PAGE_W - MARGIN, PAGE_H - 25 * mm,
-                      f"សរុប: {total} ព្រឹត្តិការណ៍")
-
-    today = datetime.now(TZ).date()
-    columns_y_top = PAGE_H - HEADER_H - 5 * mm
-    columns_bottom = MARGIN + 15 * mm
-
-    for i, d in enumerate(week_dates):
-        col_x = content_x + i * (col_w + COL_GAP)
-        col_top = columns_y_top
-
-        is_weekend = d.weekday() >= 5
-        is_today = d == today
-
-        if is_today:
-            c.setFillColor(COLOR_TODAY)
-        elif is_weekend:
-            c.setFillColor(COLOR_WEEKEND)
-        else:
-            c.setFillColor(white)
-        c.rect(col_x, columns_bottom, col_w, col_top - columns_bottom,
-               fill=1, stroke=0)
-
-        c.setStrokeColor(COLOR_BORDER)
-        c.setLineWidth(0.5)
-        c.rect(col_x, columns_bottom, col_w, col_top - columns_bottom,
-               fill=0, stroke=1)
-
-        day_header_y = col_top - DAY_HEADER_H
-
-        c.setFont('Helvetica-Bold', 9)
-        if is_weekend:
-            c.setFillColor(COLOR_TEXT_RED)
-        elif is_today:
-            c.setFillColor(COLOR_HEADER)
-        else:
-            c.setFillColor(COLOR_TEXT_GRAY)
-        day_short = WEEKDAY_SHORT[d.weekday()]
-        c.drawCentredString(col_x + col_w / 2, col_top - 6 * mm, day_short)
-
-        day_num = str(d.day)
-        if is_today:
-            c.setFillColor(COLOR_HEADER)
-            c.circle(col_x + col_w / 2, col_top - 12 * mm, 5 * mm,
-                     fill=1, stroke=0)
-            c.setFillColor(white)
-            c.setFont('Helvetica-Bold', 14)
-            c.drawCentredString(col_x + col_w / 2, col_top - 13.5 * mm, day_num)
-        else:
-            c.setFillColor(COLOR_TEXT_DARK)
-            c.setFont('Helvetica-Bold', 14)
-            c.drawCentredString(col_x + col_w / 2, col_top - 13.5 * mm, day_num)
-
-        c.setFillColor(COLOR_TEXT_GRAY)
-        c.setFont(KHMER, 8)
-        day_khmer = WEEKDAY_NAMES[d.weekday()]
-        c.drawCentredString(col_x + col_w / 2, col_top - 19 * mm, day_khmer)
-
-        c.setStrokeColor(COLOR_BORDER)
-        c.setLineWidth(0.3)
-        c.line(col_x + 2, day_header_y, col_x + col_w - 2, day_header_y)
-
-        events = events_by_date[d]
-        event_y = day_header_y - 4 * mm
-
-        for e in events:
-            category = e.get('category', '📌 ផ្សេងៗ')
-            base_color = CATEGORY_COLORS.get(category, HexColor("#00ACC1"))
-
-            if STATUS_DONE in e.get('status', ''):
-                base_color = STATUS_COLORS_PDF[STATUS_DONE]
-            elif STATUS_CANCEL in e.get('status', ''):
-                base_color = STATUS_COLORS_PDF[STATUS_CANCEL]
-
-            max_chars = max(int(col_w / (2.5 * mm)), 10)
-            event_lines = wrap_pdf_text(e['event'], max_chars)
-
-            line_h = 3.5 * mm
-            header_h = 5 * mm
-            box_h = header_h + (len(event_lines) * line_h) + 3 * mm
-            box_h = max(box_h, 12 * mm)
-
-            box_x = col_x + 2
-            box_y = event_y - box_h
-            box_w = col_w - 4
-
-            if box_y < columns_bottom + 2:
-                c.setFillColor(COLOR_TEXT_GRAY)
-                c.setFont(KHMER, 7)
-                remaining = len(events) - events.index(e)
-                c.drawString(col_x + 3, event_y - 3, f"+ {remaining} ទៀត...")
-                break
-
-            c.setFillColor(base_color)
-            c.setStrokeColor(base_color)
-            c.roundRect(box_x, box_y, box_w, box_h, 2 * mm, fill=1, stroke=1)
-
-            c.setFillColor(white)
-            c.setFont('Helvetica-Bold', 6.5)
-            c.drawString(box_x + 3 * mm, box_y + box_h - 3.5 * mm, f"#{e['id']}")
-
-            if e['time']:
-                c.setFont('Helvetica-Bold', 7)
-                c.drawRightString(box_x + box_w - 2 * mm,
-                                  box_y + box_h - 3.5 * mm,
-                                  f"{e['time']}")
-
-            c.setFont(KHMER, 7.5)
-            text_y = box_y + box_h - 7 * mm
-            for line in event_lines:
-                c.drawString(box_x + 3 * mm, text_y, line)
-                text_y -= line_h
-
-            event_y = box_y - 2 * mm
-
-    # Footer
-    c.setFillColor(COLOR_TEXT_GRAY)
-    c.setFont(KHMER, 8)
-    footer = f"Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
-    c.drawCentredString(PAGE_W / 2, 5 * mm, footer)
-
-    # Legend
-    legend_y = 8 * mm
-    legend_x = MARGIN
-    c.setFont(KHMER, 7)
-    legend_items = [
-        (HexColor("#4285F4"), "ការងារ"),
-        (HexColor("#EA4335"), "គ្រួសារ"),
-        (HexColor("#34A853"), "សុខភាព"),
-        (HexColor("#FBBC04"), "ព្រឹត្តិការណ៍"),
-        (HexColor("#9C27B0"), "សិក្សា"),
-    ]
-    for color, name in legend_items:
-        c.setFillColor(color)
-        c.rect(legend_x, legend_y, 3 * mm, 3 * mm, fill=1, stroke=0)
-        c.setFillColor(COLOR_TEXT_DARK)
-        c.drawString(legend_x + 4 * mm, legend_y + 0.5 * mm, name)
-        legend_x += 22 * mm
-
-    c.showPage()
-    c.save()
+    HTML(string=html_content).write_pdf(output)
     output.seek(0)
     return output
 
 
+def build_month_html(year, month, events_by_date, today):
+    """Build HTML for Month Calendar"""
+    first_day = datetime(year, month, 1).date()
+    if month == 12:
+        last_day = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        last_day = datetime(year, month + 1, 1).date() - timedelta(days=1)
+
+    total = sum(len(events_by_date[d]) for d in events_by_date)
+
+    weekdays_html = ""
+    weekdays_kh = ["ច័ន្ទ", "អង្គារ", "ពុធ", "ព្រហស្បតិ៍", "សុក្រ", "សៅរ៍", "អាទិត្យ"]
+    weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+    for en, kh in zip(weekdays_en, weekdays_kh):
+        weekdays_html += (f'<div class="wd-header">'
+                          f'<div class="wd-en">{en}</div>'
+                          f'<div class="wd-kh">{kh}</div>'
+                          f'</div>')
+
+    first_weekday = first_day.weekday()
+    total_days = (last_day - first_day).days + 1
+    total_cells = first_weekday + total_days
+    rows = (total_cells + 6) // 7
+
+    cells_html = ""
+    for cell_idx in range(rows * 7):
+        day_offset = cell_idx - first_weekday
+        if 0 <= day_offset < total_days:
+            cell_date = first_day + timedelta(days=day_offset)
+            is_this_month = True
+        else:
+            if day_offset < 0:
+                cell_date = first_day + timedelta(days=day_offset)
+            else:
+                cell_date = last_day + timedelta(days=day_offset - total_days + 1)
+            is_this_month = False
+
+        is_weekend = cell_date.weekday() >= 5
+        is_today = cell_date == today
+
+        cell_classes = ["cell"]
+        if not is_this_month:
+            cell_classes.append("other-month")
+        elif is_today:
+            cell_classes.append("today")
+        elif is_weekend:
+            cell_classes.append("weekend")
+
+        day_num = str(cell_date.day)
+        num_classes = ["cell-num"]
+        if is_weekend and is_this_month:
+            num_classes.append("weekend-num")
+        if is_today:
+            num_classes.append("today-num")
+
+        events_html = ""
+        if is_this_month and cell_date in events_by_date:
+            events = events_by_date[cell_date]
+            for e in events[:4]:
+                category = e.get('category', '📌 ផ្សេងៗ')
+                color = CATEGORY_COLOR_MAP.get(category, "#00ACC1")
+                time_prefix = f"{e['time']} " if e['time'] else ""
+                event_text = e['event'][:25] + ("…" if len(e['event']) > 25 else "")
+                events_html += (f'<div class="mini-event" style="background:{color}">'
+                                f'{html_escape(time_prefix + event_text)}</div>')
+            if len(events) > 4:
+                events_html += f'<div class="more">+ {len(events)-4} ទៀត</div>'
+
+        cells_html += f"""
+        <div class="{' '.join(cell_classes)}">
+            <div class="{' '.join(num_classes)}">{day_num}</div>
+            <div class="cell-events">{events_html}</div>
+        </div>
+        """
+
+    footer_time = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+{FONT_CSS}
+
+@page {{
+    size: A4 landscape;
+    margin: 8mm;
+}}
+
+* {{
+    box-sizing: border-box;
+    font-family: 'Noto Sans Khmer', 'Noto Color Emoji', sans-serif;
+    margin: 0;
+    padding: 0;
+}}
+
+body {{
+    color: #202124;
+}}
+
+.header {{
+    background-color: #4285F4;
+    color: white;
+    padding: 18px;
+    text-align: center;
+    border-radius: 8px 8px 0 0;
+}}
+
+.header h1 {{
+    font-size: 24pt;
+    font-weight: 700;
+}}
+
+.header .subtitle {{
+    font-size: 11pt;
+    margin-top: 5px;
+}}
+
+.weekdays {{
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    margin-top: 4px;
+}}
+
+.wd-header {{
+    background-color: #4285F4;
+    color: white;
+    padding: 8px;
+    text-align: center;
+}}
+
+.wd-en {{
+    font-size: 10pt;
+    font-weight: 700;
+    font-family: 'Helvetica', sans-serif;
+}}
+
+.wd-kh {{
+    font-size: 8pt;
+    margin-top: 2px;
+}}
+
+.grid {{
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    margin-top: 2px;
+}}
+
+.cell {{
+    background-color: white;
+    border: 1px solid #DADCE0;
+    min-height: 100px;
+    padding: 6px;
+}}
+
+.cell.weekend {{
+    background-color: #FFF3E0;
+}}
+
+.cell.today {{
+    background-color: #E3F2FD;
+}}
+
+.cell.other-month {{
+    background-color: #F5F5F5;
+}}
+
+.cell-num {{
+    font-size: 12pt;
+    font-weight: 700;
+    color: #202124;
+    margin-bottom: 4px;
+    font-family: 'Helvetica', sans-serif;
+}}
+
+.cell-num.weekend-num {{
+    color: #EA4335;
+}}
+
+.cell-num.today-num {{
+    display: inline-block;
+    background-color: #4285F4;
+    color: white;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 10pt;
+}}
+
+.other-month .cell-num {{
+    color: #BDBDBD;
+}}
+
+.cell-events {{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}}
+
+.mini-event {{
+    color: white;
+    font-size: 7pt;
+    padding: 2px 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}}
+
+.more {{
+    font-size: 7pt;
+    color: #5F6368;
+    font-style: italic;
+}}
+
+.footer {{
+    margin-top: 8px;
+    text-align: center;
+    font-size: 8pt;
+    color: #5F6368;
+}}
+</style>
+</head>
+<body>
+    <div class="header">
+        <h1>📅 {KHMER_MONTHS_NAMES[month]} {year}</h1>
+        <div class="subtitle">សរុប: {total} ព្រឹត្តិការណ៍</div>
+    </div>
+
+    <div class="weekdays">
+        {weekdays_html}
+    </div>
+
+    <div class="grid">
+        {cells_html}
+    </div>
+
+    <div class="footer">
+        Voice Tracker Bot • {footer_time}
+    </div>
+</body>
+</html>
+"""
+    return html
+
+
 def generate_month_calendar_pdf(year=None, month=None):
-    """PDF Calendar ខែមួយ (Grid view)"""
+    """Generate Month PDF using WeasyPrint"""
     now = datetime.now(TZ)
     if year is None:
         year = now.year
@@ -975,161 +1287,11 @@ def generate_month_calendar_pdf(year=None, month=None):
     for d in events_by_date:
         events_by_date[d].sort(key=lambda x: x['time'] or "99:99")
 
-    has_khmer = register_khmer_font_pdf()
-    KHMER = 'Khmer' if has_khmer else 'Helvetica'
+    today = datetime.now(TZ).date()
+    html_content = build_month_html(year, month, events_by_date, today)
 
     output = BytesIO()
-    PAGE = landscape(A4)
-    PAGE_W, PAGE_H = PAGE
-    c = canvas.Canvas(output, pagesize=PAGE)
-
-    COLOR_HEADER = HexColor("#4285F4")
-    COLOR_WEEKEND = HexColor("#FFF3E0")
-    COLOR_TODAY = HexColor("#E3F2FD")
-    COLOR_OTHER_MONTH = HexColor("#F5F5F5")
-    COLOR_BORDER = HexColor("#DADCE0")
-    COLOR_TEXT_DARK = HexColor("#202124")
-    COLOR_TEXT_GRAY = HexColor("#5F6368")
-    COLOR_TEXT_RED = HexColor("#EA4335")
-
-    CATEGORY_COLORS = {
-        "🏢 ការងារ": HexColor("#4285F4"),
-        "👨‍👩‍👧 គ្រួសារ": HexColor("#EA4335"),
-        "💊 សុខភាព": HexColor("#34A853"),
-        "🎉 ព្រឹត្តិការណ៍": HexColor("#FBBC04"),
-        "📚 សិក្សា": HexColor("#9C27B0"),
-        "📌 ផ្សេងៗ": HexColor("#00ACC1"),
-    }
-
-    MARGIN = 15 * mm
-    HEADER_H = 30 * mm
-
-    c.setFillColor(COLOR_HEADER)
-    c.rect(0, PAGE_H - HEADER_H, PAGE_W, HEADER_H, fill=1, stroke=0)
-    c.setFillColor(white)
-    c.setFont(KHMER, 22)
-    title = f"📅 {KHMER_MONTHS_NAMES[month]} {year}"
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 18 * mm, title)
-
-    total = sum(len(events_by_date[d]) for d in events_by_date)
-    c.setFont(KHMER, 11)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 25 * mm,
-                        f"សរុប: {total} ព្រឹត្តិការណ៍")
-
-    grid_top = PAGE_H - HEADER_H - 5 * mm
-    grid_bottom = MARGIN
-    grid_left = MARGIN
-    grid_right = PAGE_W - MARGIN
-    grid_w = grid_right - grid_left
-
-    day_header_h = 8 * mm
-    grid_content_top = grid_top - day_header_h
-
-    weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-    col_w = grid_w / 7
-    for i, wd in enumerate(weekdays_en):
-        x = grid_left + i * col_w
-        c.setFillColor(COLOR_HEADER)
-        c.setFont('Helvetica-Bold', 10)
-        c.drawCentredString(x + col_w / 2, grid_top - 5 * mm, wd)
-
-    first_weekday = first_day.weekday()
-    total_days = (last_day - first_day).days + 1
-    total_cells = first_weekday + total_days
-    rows = (total_cells + 6) // 7
-
-    row_h = (grid_content_top - grid_bottom) / rows
-    today = datetime.now(TZ).date()
-
-    for cell_idx in range(rows * 7):
-        row = cell_idx // 7
-        col = cell_idx % 7
-        cell_x = grid_left + col * col_w
-        cell_y = grid_content_top - (row + 1) * row_h
-
-        day_offset = cell_idx - first_weekday
-        if 0 <= day_offset < total_days:
-            cell_date = first_day + timedelta(days=day_offset)
-            is_this_month = True
-        else:
-            if day_offset < 0:
-                cell_date = first_day + timedelta(days=day_offset)
-            else:
-                cell_date = last_day + timedelta(days=day_offset - total_days + 1)
-            is_this_month = False
-
-        is_weekend = cell_date.weekday() >= 5
-        is_today = cell_date == today
-
-        if not is_this_month:
-            c.setFillColor(COLOR_OTHER_MONTH)
-        elif is_today:
-            c.setFillColor(COLOR_TODAY)
-        elif is_weekend:
-            c.setFillColor(COLOR_WEEKEND)
-        else:
-            c.setFillColor(white)
-        c.rect(cell_x, cell_y, col_w, row_h, fill=1, stroke=0)
-
-        c.setStrokeColor(COLOR_BORDER)
-        c.setLineWidth(0.3)
-        c.rect(cell_x, cell_y, col_w, row_h, fill=0, stroke=1)
-
-        day_num = str(cell_date.day)
-        if is_today:
-            c.setFillColor(COLOR_HEADER)
-            c.circle(cell_x + 5 * mm, cell_y + row_h - 4 * mm, 3 * mm,
-                     fill=1, stroke=0)
-            c.setFillColor(white)
-            c.setFont('Helvetica-Bold', 9)
-            c.drawCentredString(cell_x + 5 * mm, cell_y + row_h - 5 * mm, day_num)
-        elif is_this_month:
-            c.setFillColor(COLOR_TEXT_RED if is_weekend else COLOR_TEXT_DARK)
-            c.setFont('Helvetica-Bold', 10)
-            c.drawString(cell_x + 2 * mm, cell_y + row_h - 5 * mm, day_num)
-        else:
-            c.setFillColor(HexColor("#BDBDBD"))
-            c.setFont('Helvetica', 9)
-            c.drawString(cell_x + 2 * mm, cell_y + row_h - 5 * mm, day_num)
-
-        if is_this_month and cell_date in events_by_date:
-            events = events_by_date[cell_date]
-            event_y = cell_y + row_h - 8 * mm
-            max_events = max(int((row_h - 10 * mm) / (3.5 * mm)), 1)
-
-            for i, e in enumerate(events[:max_events]):
-                category = e.get('category', '📌 ផ្សេងៗ')
-                color = CATEGORY_COLORS.get(category, HexColor("#00ACC1"))
-
-                pill_h = 3 * mm
-                c.setFillColor(color)
-                c.roundRect(cell_x + 1.5 * mm, event_y - pill_h,
-                            col_w - 3 * mm, pill_h, 0.5 * mm,
-                            fill=1, stroke=0)
-
-                c.setFillColor(white)
-                c.setFont(KHMER, 6)
-                display_text = e['event'][:15]
-                if e['time']:
-                    display_text = f"{e['time']} {display_text}"
-                c.drawString(cell_x + 2 * mm, event_y - pill_h + 0.8 * mm,
-                             display_text)
-
-                event_y -= (pill_h + 0.5 * mm)
-
-            if len(events) > max_events:
-                c.setFillColor(COLOR_TEXT_GRAY)
-                c.setFont(KHMER, 6)
-                c.drawString(cell_x + 2 * mm, event_y - 2 * mm,
-                             f"+ {len(events) - max_events} ទៀត")
-
-    c.setFillColor(COLOR_TEXT_GRAY)
-    c.setFont(KHMER, 8)
-    footer = f"Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
-    c.drawCentredString(PAGE_W / 2, 5 * mm, footer)
-
-    c.showPage()
-    c.save()
+    HTML(string=html_content).write_pdf(output)
     output.seek(0)
     return output
 
@@ -1210,7 +1372,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = query.data.split(":")
     action = parts[0]
 
-    # Status change
     if action == "setstatus":
         row_num = parts[1]
         status_key = parts[2]
@@ -1239,7 +1400,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data['date'], data['time'], data['event'], data['category']
         )
 
-        # Push to Google Calendar
         try:
             category_name = CATEGORIES.get(data['category'], CATEGORIES["other"])
             gcal_id = push_to_google_calendar(
@@ -1250,7 +1410,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Auto-push failed: {e}")
 
-        # Recurring events
         extra_count = 0
         if data.get('is_recurring') and data.get('recurring_day') is not None:
             base_date = datetime.strptime(data['date'], "%Y-%m-%d").date()
@@ -1328,7 +1487,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
-        "🎙️ *Voice Tracker Bot v3.1*\n\n"
+        "🎙️ *Voice Tracker Bot v3.2*\n\n"
         "📌 *របៀបប្រើ:*\n"
         "🎤 ផ្ញើសំឡេងខ្មែរ\n"
         "📸 ផ្ញើរូបភាព\n"
@@ -1382,7 +1541,6 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def week_command(update, context):
-    """សប្តាហ៍នេះ - PDF"""
     await update.message.reply_text("📄 កំពុងបង្កើត PDF ស្អាតៗ...")
     try:
         today = datetime.now(TZ).date()
@@ -1407,7 +1565,6 @@ async def week_command(update, context):
 
 
 async def nextweek_command(update, context):
-    """សប្តាហ៍ក្រោយ - PDF"""
     await update.message.reply_text("📄 កំពុងបង្កើត PDF ស្អាតៗ...")
     try:
         today = datetime.now(TZ).date()
@@ -1432,7 +1589,6 @@ async def nextweek_command(update, context):
 
 
 async def month_command(update, context):
-    """PDF Calendar ខែនេះ"""
     await update.message.reply_text("📄 កំពុងបង្កើត PDF ខែ...")
     try:
         now = datetime.now(TZ)
@@ -1678,7 +1834,6 @@ async def export_command(update, context):
 
 
 async def sync_command(update, context):
-    """Manual sync ពី Google Calendar"""
     await update.message.reply_text("🔄 កំពុង sync ពី Google Calendar...")
     try:
         loop = asyncio.get_event_loop()
@@ -1765,7 +1920,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text or text.startswith("/"):
         return
 
-    # Editing mode
     if 'editing_field' in context.user_data:
         field = context.user_data.pop('editing_field')
         chat_id = context.user_data.pop('editing_chat', None)
@@ -1812,7 +1966,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════
 
 async def send_weekly_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Friday 8AM - ផ្ញើ PDF Calendar"""
     logger.info("🔔 Weekly PDF reminder...")
     if not CHAT_ID:
         return
@@ -1841,7 +1994,6 @@ async def send_weekly_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """Check events - remind 24h and 1h before"""
     if not CHAT_ID:
         return
     try:
@@ -1884,7 +2036,6 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def sync_calendar_job(context: ContextTypes.DEFAULT_TYPE):
-    """Auto pull ពី Google Calendar (រៀងរាល់ ១៥ នាទី)"""
     try:
         loop = asyncio.get_event_loop()
         added, updated = await loop.run_in_executor(None, sync_from_google_calendar)
@@ -1911,17 +2062,16 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "🤖 Voice Tracker Bot v3.1 is running!"
+    return "🤖 Voice Tracker Bot v3.2 is running!"
 
 
 @flask_app.route("/health")
 def health():
-    return {"status": "ok", "version": "3.1"}
+    return {"status": "ok", "version": "3.2"}
 
 
 @flask_app.route("/calendar/<secret>")
 def calendar_feed(secret):
-    """Public .ics feed"""
     if secret != CALENDAR_SECRET:
         return "Unauthorized", 401
     try:
@@ -1949,10 +2099,9 @@ def run_flask():
 # ══════════════════════════════════════
 
 def run_bot():
-    logger.info("🚀 Starting Bot v3.1...")
+    logger.info("🚀 Starting Bot v3.2...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("today", today_command))
@@ -1971,15 +2120,12 @@ def run_bot():
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # Callbacks
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # Messages
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Jobs
     job_queue = app.job_queue
 
     reminder_time = dtime(hour=8, minute=0, tzinfo=TZ)
@@ -2001,7 +2147,7 @@ def run_bot():
     )
     logger.info("🔄 Google Calendar sync: Every 15 min")
 
-    logger.info("✅ Bot v3.1 is running!")
+    logger.info("✅ Bot v3.2 is running!")
     app.run_polling(drop_pending_updates=True)
 
 
