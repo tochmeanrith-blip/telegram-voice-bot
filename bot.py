@@ -125,7 +125,7 @@ WEEKDAY_SHORT = {
 
 CATEGORIES = {
  "work": "🏢 ការងារ",
- "family": "👨‍👩‍👧 គ្រួសារ",
+ "family": "👨👩👧 គ្រួសារ",
  "health": "💊 សុខភាព",
  "event": "🎉 ព្រឹត្តិការណ៍",
  "study": "📚 សិក្សា",
@@ -168,8 +168,7 @@ def html_escape(text):
  return ""
  return (str(text)
  .replace("&", "&amp;")
- .replace("<", "&lt;")
- .replace(">", "&gt;")
+ .replace("", "&gt;")
  .replace('"', "&quot;")
  .replace("'", "&#39;"))
 
@@ -339,12 +338,7 @@ def get_all_events():
 def sort_sheet_by_date():
  try:
  all_values = worksheet.get_all_values()
- if len(all_values) <= 1:
- return False
- header = all_values[0]
- data = all_values[1:]
- data.sort(key=lambda x: (
- x[1] if len(x) > 1 else "",
+ if len(all_values)  1 else "",
  x[2] if len(x) > 2 else ""
  ))
  for idx, row in enumerate(data, start=1):
@@ -677,7 +671,7 @@ from weasyprint import HTML
 
 CATEGORY_COLOR_MAP = {
  "🏢 ការងារ": "#4285F4",
- "👨‍👩‍👧 គ្រួសារ": "#EA4335",
+ "👨👩👧 គ្រួសារ": "#EA4335",
  "💊 សុខភាព": "#34A853",
  "🎉 ព្រឹត្តិការណ៍": "#FBBC04",
  "📚 សិក្សា": "#9C27B0",
@@ -717,9 +711,9 @@ def build_week_html(start_date, week_dates, events_by_date, today):
  elif is_today:
  wd_class = "today-text"
 
- day_num_html = (f'<div class="day-num today-circle">{day_num}</div>'
+ day_num_html = (f'{day_num}'
  if is_today
- else f'<div class="day-num">{day_num}</div>')
+ else f'{day_num}')
 
  events_html = ""
  for e in events_by_date[d]:
@@ -735,39 +729,39 @@ def build_week_html(start_date, week_dates, events_by_date, today):
  color = "#9E9E9E"
  extra_style = "opacity: 0.5;"
 
- time_html = (f'<span class="event-time">{html_escape(e["time"])}</span>'
+ time_html = (f'{html_escape(e["time"])}'
  if e['time'] else "")
 
  events_html += f"""
- <div class="event" style="background-color: {color}; {extra_style}">
- <div class="event-header">
- <span class="event-id">#{html_escape(e['id'])}</span>
+ 
+ 
+ #{html_escape(e['id'])}
  {time_html}
- </div>
- <div class="event-text">{html_escape(e['event'])}</div>
- </div>
+ 
+ {html_escape(e['event'])}
+ 
  """
 
  columns_html += f"""
- <div class="{' '.join(col_classes)}">
- <div class="day-header">
- <div class="weekday-en {wd_class}">{day_short}</div>
+ 
+ 
+ {day_short}
  {day_num_html}
- <div class="weekday-kh">{day_khmer}</div>
- </div>
- <div class="events">
+ {day_khmer}
+ 
+ 
  {events_html}
- </div>
- </div>
+ 
+ 
  """
 
  footer_time = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
 
- html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
+ html = f"""
+
+
+
+
 {FONT_IMPORT}
 
 @page {{
@@ -1001,41 +995,41 @@ html, body {{
  vertical-align: middle;
  margin-right: 4px;
 }}
-</style>
-</head>
-<body>
- <div class="header">
- <div class="header-flex">
- <div class="header-left">
- <div class="header-title">កាលវិភាគសប្តាហ៍</div>
- <div class="header-subtitle">{subtitle}</div>
- </div>
- <div class="header-right">
- សរុប៖ <span class="header-count-num">{total}</span> ព្រឹត្តិការណ៍
- </div>
- </div>
- </div>
 
- <div class="grid">
- <div class="grid-row">
+
+
+ 
+ 
+ 
+ កាលវិភាគសប្តាហ៍
+ {subtitle}
+ 
+ 
+ សរុប៖ {total} ព្រឹត្តិការណ៍
+ 
+ 
+ 
+
+ 
+ 
  {columns_html}
- </div>
- </div>
+ 
+ 
 
- <div class="footer">
- <div class="footer-left">
- <span class="legend-item"><span class="legend-color" style="background:#4285F4"></span>ការងារ</span>
- <span class="legend-item"><span class="legend-color" style="background:#EA4335"></span>គ្រួសារ</span>
- <span class="legend-item"><span class="legend-color" style="background:#34A853"></span>សុខភាព</span>
- <span class="legend-item"><span class="legend-color" style="background:#FBBC04"></span>ព្រឹត្តិការណ៍</span>
- <span class="legend-item"><span class="legend-color" style="background:#9C27B0"></span>សិក្សា</span>
- </div>
- <div class="footer-right">
+ 
+ 
+ ការងារ
+ គ្រួសារ
+ សុខភាព
+ ព្រឹត្តិការណ៍
+ សិក្សា
+ 
+ 
  Voice Tracker Bot • {footer_time}
- </div>
- </div>
-</body>
-</html>
+ 
+ 
+
+
 """
  return html
 
@@ -1053,44 +1047,10 @@ def generate_week_calendar_pdf(start_date=None):
  for e in all_events:
  try:
  d = datetime.strptime(e['date'], "%Y-%m-%d").date()
- if start_date <= d <= start_date + timedelta(days=6):
- events_by_date[d].append(e)
- except Exception:
- pass
-
- for d in events_by_date:
- events_by_date[d].sort(
- key=lambda x: (x['time'] or "99:99",
- int(x['id']) if str(x['id']).isdigit() else 0)
- )
-
- today = datetime.now(TZ).date()
- html_content = build_week_html(start_date, week_dates, events_by_date, today)
-
- output = BytesIO()
- HTML(string=html_content).write_pdf(output)
- output.seek(0)
- return output
-
-
-def build_month_html(year, month, events_by_date, today):
- """Build HTML for Month Calendar"""
- first_day = datetime(year, month, 1).date()
- if month == 12:
- last_day = datetime(year + 1, 1, 1).date() - timedelta(days=1)
- else:
- last_day = datetime(year, month + 1, 1).date() - timedelta(days=1)
-
- total = sum(len(events_by_date[d]) for d in events_by_date)
-
- weekdays_html = ""
- weekdays_kh = ["ច័ន្ទ", "អង្គារ", "ពុធ", "ព្រហស្បតិ៍", "សុក្រ", "សៅរ៍", "អាទិត្យ"]
- weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
- for en, kh in zip(weekdays_en, weekdays_kh):
- weekdays_html += (f'<div class="wd-cell">'
- f'<div class="wd-en">{en}</div>'
- f'<div class="wd-kh">{kh}</div>'
- f'</div>')
+ if start_date '
+ f'{en}'
+ f'{kh}'
+ f'')
 
  first_weekday = first_day.weekday()
  total_days = (last_day - first_day).days + 1
@@ -1103,17 +1063,7 @@ def build_month_html(year, month, events_by_date, today):
  for col_idx in range(7):
  cell_idx = row_idx * 7 + col_idx
  day_offset = cell_idx - first_weekday
- if 0 <= day_offset < total_days:
- cell_date = first_day + timedelta(days=day_offset)
- is_this_month = True
- else:
- if day_offset < 0:
- cell_date = first_day + timedelta(days=day_offset)
- else:
- cell_date = last_day + timedelta(days=day_offset - total_days + 1)
- is_this_month = False
-
- is_weekend = cell_date.weekday() >= 5
+ if 0 = 5
  is_today = cell_date == today
 
  cell_classes = ["cell"]
@@ -1139,27 +1089,27 @@ def build_month_html(year, month, events_by_date, today):
  color = CATEGORY_COLOR_MAP.get(category, "#00ACC1")
  time_prefix = f"{e['time']} " if e['time'] else ""
  event_text = e['event'][:22] + ("…" if len(e['event']) > 22 else "")
- events_html += (f'<div class="mini-event" style="background:{color}">'
- f'{html_escape(time_prefix + event_text)}</div>')
+ events_html += (f''
+ f'{html_escape(time_prefix + event_text)}')
  if len(events) > 4:
- events_html += f'<div class="more">+ {len(events)-4} ទៀត</div>'
+ events_html += f'+ {len(events)-4} ទៀត'
 
  row_cells += f"""
- <div class="{' '.join(cell_classes)}">
- <div class="{' '.join(num_classes)}">{day_num}</div>
- <div class="cell-events">{events_html}</div>
- </div>
+ 
+ {day_num}
+ {events_html}
+ 
  """
 
- rows_html += f'<div class="grid-row">{row_cells}</div>'
+ rows_html += f'{row_cells}'
 
  footer_time = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
 
- html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
+ html = f"""
+
+
+
+
 {FONT_IMPORT}
 
 @page {{
@@ -1323,25 +1273,25 @@ html, body {{
  font-size: 8pt;
  color: #5F6368;
 }}
-</style>
-</head>
-<body>
- <div class="header">
- <div class="header-title">{KHMER_MONTHS_NAMES[month]} {year}</div>
- <div class="header-subtitle">សរុប៖ <span class="header-count-num">{total}</span> ព្រឹត្តិការណ៍</div>
- </div>
 
- <div class="weekdays">
+
+
+ 
+ {KHMER_MONTHS_NAMES[month]} {year}
+ សរុប៖ {total} ព្រឹត្តិការណ៍
+ 
+
+ 
  {weekdays_html}
- </div>
+ 
 
  {rows_html}
 
- <div class="footer">
+ 
  Voice Tracker Bot • {footer_time}
- </div>
-</body>
-</html>
+ 
+
+
 """
  return html
 
@@ -1365,101 +1315,7 @@ def generate_month_calendar_pdf(year=None, month=None):
  for e in all_events:
  try:
  d = datetime.strptime(e['date'], "%Y-%m-%d").date()
- if first_day <= d <= last_day:
- events_by_date[d].append(e)
- except Exception:
- pass
-
- for d in events_by_date:
- events_by_date[d].sort(key=lambda x: x['time'] or "99:99")
-
- today = datetime.now(TZ).date()
- html_content = build_month_html(year, month, events_by_date, today)
-
- output = BytesIO()
- HTML(string=html_content).write_pdf(output)
- output.seek(0)
- return output
-
-# ══════════════════════════════════════
-# 🤖 AI Summary & Insights
-# ══════════════════════════════════════
-
-def generate_weekly_summary_ai(week_start, week_end):
- """
- ប្រើ Gemini វិភាគ events សប្តាហ៍មួយ
- Returns: dict {summary, insights, suggestions}
- """
- try:
- events = get_all_events()
- 
- # Events in the target week
- week_events = []
- for e in events:
- try:
- d = datetime.strptime(e['date'], "%Y-%m-%d").date()
- if week_start <= d <= week_end:
- week_events.append(e)
- except Exception:
- pass
- 
- # Events for next week (for suggestions)
- next_week_start = week_end + timedelta(days=1)
- next_week_end = next_week_start + timedelta(days=6)
- next_week_events = []
- for e in events:
- try:
- d = datetime.strptime(e['date'], "%Y-%m-%d").date()
- if next_week_start <= d <= next_week_end:
- next_week_events.append(e)
- except Exception:
- pass
- 
- # Previous week (for comparison)
- prev_week_start = week_start - timedelta(days=7)
- prev_week_end = week_start - timedelta(days=1)
- prev_week_count = sum(1 for e in events
- if prev_week_start <= 
- datetime.strptime(e['date'], "%Y-%m-%d").date() 
- <= prev_week_end)
- 
- # Prepare data
- current_week_data = [
- {
- "date": e['date'],
- "time": e['time'],
- "event": e['event'],
- "category": e['category'],
- "status": e['status']
- }
- for e in week_events
- ]
- 
- next_week_data = [
- {
- "date": e['date'],
- "time": e['time'],
- "event": e['event'],
- "category": e['category']
- }
- for e in next_week_events
- ]
- 
- # Statistics
- cat_counter = Counter(e['category'] for e in week_events)
- status_counter = Counter(e['status'] for e in week_events)
- day_counter = Counter()
- for e in week_events:
- try:
- d = datetime.strptime(e['date'], "%Y-%m-%d")
- day_counter[WEEKDAY_NAMES[d.weekday()]] += 1
- except Exception:
- pass
- 
- done_count = status_counter.get(STATUS_DONE, 0)
- pending_count = status_counter.get(STATUS_PENDING, 0)
- total = len(week_events)
- completion_rate = (done_count / total * 100) if total > 0 else 0
+ if first_day  0 else 0
  
  # Growth vs last week
  if prev_week_count > 0:
@@ -1740,124 +1596,7 @@ def generate_insights_ai():
  """AI Insights ពី data ទាំងអស់"""
  try:
  events = get_all_events()
- if len(events) < 5:
- return None
- 
- # Prepare stats
- cat_counter = Counter(e['category'] for e in events)
- status_counter = Counter(e['status'] for e in events)
- 
- # Monthly breakdown (last 3 months)
- now = datetime.now(TZ)
- monthly = defaultdict(int)
- for e in events:
- try:
- d = datetime.strptime(e['date'], "%Y-%m-%d")
- key = d.strftime("%Y-%m")
- monthly[key] += 1
- except Exception:
- pass
- 
- # Time patterns
- time_slots = {"morning": 0, "afternoon": 0, "evening": 0, "night": 0}
- for e in events:
- if e['time']:
- try:
- h = int(e['time'].split(":")[0])
- if 5 <= h < 12:
- time_slots['morning'] += 1
- elif 12 <= h < 17:
- time_slots['afternoon'] += 1
- elif 17 <= h < 21:
- time_slots['evening'] += 1
- else:
- time_slots['night'] += 1
- except Exception:
- pass
- 
- # Weekday patterns
- weekday_counter = Counter()
- for e in events:
- try:
- d = datetime.strptime(e['date'], "%Y-%m-%d")
- weekday_counter[WEEKDAY_NAMES[d.weekday()]] += 1
- except Exception:
- pass
- 
- completion_rate = (status_counter.get(STATUS_DONE, 0) / len(events) * 100) if events else 0
- 
- data = {
- "total_events": len(events),
- "completion_rate": round(completion_rate, 1),
- "categories": dict(cat_counter),
- "monthly": dict(sorted(monthly.items())[-6:]), # Last 6 months
- "time_slots": time_slots,
- "weekdays": dict(weekday_counter),
- }
- 
- prompt = f"""អ្នកគឺជា AI data analyst ជាភាសាខ្មែរ។ សូមវិភាគ productivity data ខាងក្រោម និងផ្តល់ insights ជ្រាលជ្រៅ។
-
-ទិន្នន័យ:
-{json.dumps(data, ensure_ascii=False, indent=2)}
-
-សូមឆ្លើយជា JSON:
-{{
- "productivity_score": 85,
- "productivity_level": "ខ្ពស់/មធ្យម/ទាប",
- "personality_type": "ប្រភេទបុគ្គលិកលក្ខណៈ (ឧ. 'អ្នកគ្រប់គ្រងពេលវេលា', 'អ្នកចូលចិត្តការងារព្រឹក')",
- "key_findings": [
- "រកឃើញ 1",
- "រកឃើញ 2",
- "រកឃើញ 3"
- ],
- "strengths": ["ចំណុចខ្លាំង 1", "ចំណុចខ្លាំង 2"],
- "improvements": ["ចំណុចត្រូវកែ 1", "ចំណុចត្រូវកែ 2"],
- "patterns": [
- "Pattern ដែលរកឃើញ 1",
- "Pattern ដែលរកឃើញ 2"
- ],
- "recommendations": [
- "ការណែនាំ 1",
- "ការណែនាំ 2",
- "ការណែនាំ 3"
- ]
-}}
-
-ច្បាប់:
-1. Productivity score: 0-100
-2. ជាក់លាក់ ផ្អែកលើទិន្នន័យ
-3. Pattern គួរបង្ហាញអ្វីមួយ interesting
-4. Recommendations អាចធ្វើបាន
-
-ឆ្លើយតែ JSON។
-"""
- 
- response = gemini_client.models.generate_content(
- model="gemini-flash-latest",
- contents=[prompt],
- )
- result = response.text.strip()
- result = re.sub(r"^```json\s*|\s*```$", "", result).strip()
- result = re.sub(r"^```\s*|\s*```$", "", result).strip()
- 
- ai_data = json.loads(result)
- 
- return {
- "data": data,
- "ai": ai_data,
- }
- except Exception as e:
- logger.error(f"Insights error: {e}")
- return None
-
-
-def format_insights_telegram(data):
- """Format insights for Telegram"""
- stats = data['data']
- ai = data['ai']
- 
- score = ai.get('productivity_score', 0)
- if score >= 80:
+ if len(events) = 80:
  score_emoji = "🔥"
  elif score >= 60:
  score_emoji = "⭐"
@@ -2122,10 +1861,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
  "/calendar - 📅 ៣០ ថ្ងៃខាងមុខ\n"
  "/stats - 📊 ស្ថិតិខែនេះ\n"
  "/history - 📋 ១០ ចុងក្រោយ\n"
- "/search <ពាក្យ> - 🔍 ស្វែងរក\n"
- "/status <លេខ> - 📊 កែស្ថានភាព\n"
- "/edit <លេខ> <អត្ថបទ> - ✏️ កែ\n"
- "/delete <លេខ> - 🗑 លុប\n"
+ "/search  - 🔍 ស្វែងរក\n"
+ "/status  - 📊 កែស្ថានភាព\n"
+ "/edit   - ✏️ កែ\n"
+ "/delete  - 🗑 លុប\n"
  "/sort - 📶 រៀបតាមកាលបរិច្ឆេទ\n"
  "/sync - 🔄 Sync ពី Google Calendar\n"
  "/export - 📥 Export .ics\n\n"
@@ -2320,32 +2059,7 @@ async def calendar_command(update, context):
  for e in events:
  try:
  d = datetime.strptime(e['date'], "%Y-%m-%d").date()
- if today <= d <= today + timedelta(days=30):
- by_date[d].append(e)
- except Exception:
- pass
-
- if not by_date:
- await update.message.reply_text("📅 គ្មានព្រឹត្តិការណ៍ ៣០ ថ្ងៃខាងមុខទេ")
- return
-
- msg = "📅 *ព្រឹត្តិការណ៍ ៣០ ថ្ងៃ*\n\n"
- for d in sorted(by_date.keys()):
- wd = WEEKDAY_NAMES[d.weekday()]
- diff = (d - today).days
- if diff == 0:
- label = "🔴 ថ្ងៃនេះ"
- elif diff == 1:
- label = "🟡 ថ្ងៃស្អែក"
- else:
- label = f"🟢 នៅ {diff} ថ្ងៃទៀត"
- msg += f"📌 *{d.strftime('%Y-%m-%d')}* ({wd}) {label}\n"
- for e in sorted(by_date[d], key=lambda x: x['time'] or "99:99"):
- time_str = f"🕐 {e['time']} " if e['time'] else ""
- msg += f" `#{e['id']}` {time_str}{e['event']}\n"
- msg += "\n"
-
- if len(msg) > 4000:
+ if today  4000:
  for i in range(0, len(msg), 4000):
  await update.message.reply_text(msg[i:i+4000], parse_mode="Markdown")
  else:
@@ -2357,7 +2071,7 @@ async def calendar_command(update, context):
 async def delete_command(update, context):
  try:
  if not context.args:
- await update.message.reply_text("❌ ប្រើ: /delete <លេខ>")
+ await update.message.reply_text("❌ ប្រើ: /delete ")
  return
  row_num = context.args[0]
  if delete_row(row_num):
@@ -2370,8 +2084,7 @@ async def delete_command(update, context):
 
 async def edit_command(update, context):
  try:
- if len(context.args) < 2:
- await update.message.reply_text("❌ ប្រើ: /edit <លេខ> <អត្ថបទថ្មី>")
+ if len(context.args)  ")
  return
  row_num = context.args[0]
  new_event = " ".join(context.args[1:])
@@ -2386,7 +2099,7 @@ async def edit_command(update, context):
 async def status_command(update, context):
  try:
  if not context.args:
- await update.message.reply_text("❌ ប្រើ: /status <លេខ>")
+ await update.message.reply_text("❌ ប្រើ: /status ")
  return
  row_num = context.args[0]
  events = get_all_events()
@@ -2413,7 +2126,7 @@ async def status_command(update, context):
 async def search_command(update, context):
  try:
  if not context.args:
- await update.message.reply_text("❌ ប្រើ: /search <ពាក្យ>")
+ await update.message.reply_text("❌ ប្រើ: /search ")
  return
  keyword = " ".join(context.args)
  results = search_events(keyword)
@@ -2713,47 +2426,7 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
 
  diff_min = (event_dt - now).total_seconds() / 60
 
- if 1410 <= diff_min <= 1470:
- msg = (f"🔔 *រំលឹក ១ ថ្ងៃមុន*\n\n"
- f"📅 {e['date']} {e['time']}\n"
- f"📝 {e['event']}\n"
- f"🏷 {e['category']}")
- await context.bot.send_message(chat_id=CHAT_ID, text=msg,
- parse_mode="Markdown")
- elif 30 <= diff_min <= 90:
- msg = (f"⏰ *រំលឹក ១ ម៉ោងមុន*\n\n"
- f"📅 {e['date']} {e['time']}\n"
- f"📝 {e['event']}")
- await context.bot.send_message(chat_id=CHAT_ID, text=msg,
- parse_mode="Markdown")
- except Exception as ex:
- logger.warning(f"Reminder check #{e.get('id')}: {ex}")
- except Exception as e:
- logger.error(f"Personal reminder error: {e}")
-
-async def send_weekly_ai_summary(context: ContextTypes.DEFAULT_TYPE):
- """AI Weekly Summary - Sunday 20:00"""
- logger.info("🤖 Sending AI weekly summary...")
- if not CHAT_ID:
- return
- try:
- today = datetime.now(TZ).date()
- # Current week (Mon-Sun)
- week_start = today - timedelta(days=today.weekday())
- week_end = week_start + timedelta(days=6)
- 
- loop = asyncio.get_event_loop()
- data = await loop.run_in_executor(
- None, generate_weekly_summary_ai, week_start, week_end
- )
- 
- if not data:
- logger.warning("No data for weekly summary")
- return
- 
- msg = format_weekly_summary_telegram(data, week_start, week_end)
- 
- if len(msg) > 4000:
+ if 1410  4000:
  for i in range(0, len(msg), 4000):
  await context.bot.send_message(
  chat_id=CHAT_ID,
@@ -2829,7 +2502,7 @@ def health():
  return {"status": "ok", "version": "3.2"}
 
 
-@flask_app.route("/calendar/<secret>")
+@flask_app.route("/calendar/")
 def calendar_feed(secret):
  if secret != CALENDAR_SECRET:
  return "Unauthorized", 401
@@ -2907,7 +2580,7 @@ def run_bot():
  sync_calendar_job, interval=900, first=30,
  name="calendar_sync"
  )
- logger.info("🔄 Google Calendar sync: Every 15 min") ​​ 
+ logger.info("🔄 Google Calendar sync: Every 15 min")  
  # 🤖 AI Weekly Summary - Sunday 20:00
  weekly_ai_time = dtime(hour=20, minute=0, tzinfo=TZ)
  job_queue.run_daily(
