@@ -27,7 +27,16 @@ from telegram.ext import (
 )
 from flask import Flask, Response
 
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.colors import HexColor, white, black
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm, cm
+
 from khmer_font import get_khmer_font
+
+
 
 # ══════════════════════════════════════
 # Environment Variables
@@ -895,6 +904,454 @@ def generate_ics(events):
     lines.append("END:VCALENDAR")
     return "\n".join(lines).encode("utf-8")
 
+# ══════════════════════════════════════
+# 📄 PDF Calendar Generator
+# ══════════════════════════════════════
+
+KHMER_FONT_REGISTERED = False
+
+
+def register_khmer_font_pdf():
+    """Register Khmer font for ReportLab"""
+    global KHMER_FONT_REGISTERED
+    if KHMER_FONT_REGISTERED:
+        return True
+    try:
+        font_path = get_khmer_font()
+        if font_path and os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('Khmer', font_path))
+            KHMER_FONT_REGISTERED = True
+            logger.info("✅ Khmer font registered for PDF")
+            return True
+    except Exception as e:
+        logger.error(f"Font register error: {e}")
+    return False
+
+
+def wrap_pdf_text(text, max_chars_per_line=25):
+    if not text:
+        return [""]
+    lines = []
+    current = ""
+    for char in text:
+        if len(current) >= max_chars_per_line:
+            lines.append(current)
+            current = char
+        else:
+            current += char
+    if current:
+        lines.append(current)
+    return lines
+
+
+def generate_week_calendar_pdf(start_date=None):
+    """PDF Calendar សប្តាហ៍មួយ (A4 Landscape)"""
+    if start_date is None:
+        today = datetime.now(TZ).date()
+        start_date = today - timedelta(days=today.weekday())
+
+    week_dates = [start_date + timedelta(days=i) for i in range(7)]
+
+    all_events = get_all_events()
+    events_by_date = defaultdict(list)
+    for e in all_events:
+        try:
+            d = datetime.strptime(e['date'], "%Y-%m-%d").date()
+            if start_date <= d <= start_date + timedelta(days=6):
+                events_by_date[d].append(e)
+        except Exception:
+            pass
+
+    for d in events_by_date:
+        events_by_date[d].sort(
+            key=lambda x: (x['time'] or "99:99",
+                           int(x['id']) if str(x['id']).isdigit() else 0)
+        )
+
+    has_khmer = register_khmer_font_pdf()
+    KHMER = 'Khmer' if has_khmer else 'Helvetica'
+
+    output = BytesIO()
+    PAGE = landscape(A4)
+    PAGE_W, PAGE_H = PAGE
+    c = canvas.Canvas(output, pagesize=PAGE)
+
+    COLOR_HEADER = HexColor("#4285F4")
+    COLOR_HEADER_TEXT = HexColor("#FFFFFF")
+    COLOR_WEEKEND = HexColor("#FFF3E0")
+    COLOR_TODAY = HexColor("#E3F2FD")
+    COLOR_BORDER = HexColor("#DADCE0")
+    COLOR_TEXT_DARK = HexColor("#202124")
+    COLOR_TEXT_GRAY = HexColor("#5F6368")
+    COLOR_TEXT_RED = HexColor("#EA4335")
+
+    CATEGORY_COLORS = {
+        "🏢 ការងារ": HexColor("#4285F4"),
+        "👨‍👩‍👧 គ្រួសារ": HexColor("#EA4335"),
+        "💊 សុខភាព": HexColor("#34A853"),
+        "🎉 ព្រឹត្តិការណ៍": HexColor("#FBBC04"),
+        "📚 សិក្សា": HexColor("#9C27B0"),
+        "📌 ផ្សេងៗ": HexColor("#00ACC1"),
+    }
+
+    STATUS_COLORS_PDF = {
+        STATUS_DONE: HexColor("#34A853"),
+        STATUS_CANCEL: HexColor("#9E9E9E"),
+    }
+
+    MARGIN = 15 * mm
+    HEADER_H = 40 * mm
+    DAY_HEADER_H = 22 * mm
+    COL_GAP = 2 * mm
+
+    content_x = MARGIN
+    content_w = PAGE_W - (2 * MARGIN)
+    col_w = (content_w - (6 * COL_GAP)) / 7
+
+    # Header
+    c.setFillColor(COLOR_HEADER)
+    c.rect(0, PAGE_H - HEADER_H, PAGE_W, HEADER_H, fill=1, stroke=0)
+    c.setFillColor(COLOR_HEADER_TEXT)
+    c.setFont(KHMER, 22)
+    c.drawString(MARGIN, PAGE_H - 18 * mm, "📅 កាលវិភាគសប្តាហ៍")
+
+    end_date = start_date + timedelta(days=6)
+    subtitle = (f"{start_date.day} {KHMER_MONTHS_NAMES[start_date.month]} - "
+                f"{end_date.day} {KHMER_MONTHS_NAMES[end_date.month]} {end_date.year}")
+    c.setFont(KHMER, 14)
+    c.drawString(MARGIN, PAGE_H - 30 * mm, subtitle)
+
+    total = sum(len(events_by_date[d]) for d in week_dates)
+    c.setFont(KHMER, 12)
+    c.drawRightString(PAGE_W - MARGIN, PAGE_H - 25 * mm,
+                      f"សរុប: {total} ព្រឹត្តិការណ៍")
+
+    today = datetime.now(TZ).date()
+    columns_y_top = PAGE_H - HEADER_H - 5 * mm
+    columns_bottom = MARGIN + 10 * mm
+
+    for i, d in enumerate(week_dates):
+        col_x = content_x + i * (col_w + COL_GAP)
+        col_top = columns_y_top
+
+        is_weekend = d.weekday() >= 5
+        is_today = d == today
+
+        if is_today:
+            c.setFillColor(COLOR_TODAY)
+        elif is_weekend:
+            c.setFillColor(COLOR_WEEKEND)
+        else:
+            c.setFillColor(white)
+        c.rect(col_x, columns_bottom, col_w, col_top - columns_bottom,
+               fill=1, stroke=0)
+
+        c.setStrokeColor(COLOR_BORDER)
+        c.setLineWidth(0.5)
+        c.rect(col_x, columns_bottom, col_w, col_top - columns_bottom,
+               fill=0, stroke=1)
+
+        day_header_y = col_top - DAY_HEADER_H
+
+        c.setFont('Helvetica-Bold', 9)
+        if is_weekend:
+            c.setFillColor(COLOR_TEXT_RED)
+        elif is_today:
+            c.setFillColor(COLOR_HEADER)
+        else:
+            c.setFillColor(COLOR_TEXT_GRAY)
+        day_short = WEEKDAY_SHORT[d.weekday()]
+        c.drawCentredString(col_x + col_w / 2, col_top - 6 * mm, day_short)
+
+        day_num = str(d.day)
+        if is_today:
+            c.setFillColor(COLOR_HEADER)
+            c.circle(col_x + col_w / 2, col_top - 12 * mm, 5 * mm,
+                     fill=1, stroke=0)
+            c.setFillColor(white)
+            c.setFont('Helvetica-Bold', 14)
+            c.drawCentredString(col_x + col_w / 2, col_top - 13.5 * mm, day_num)
+        else:
+            c.setFillColor(COLOR_TEXT_DARK)
+            c.setFont('Helvetica-Bold', 14)
+            c.drawCentredString(col_x + col_w / 2, col_top - 13.5 * mm, day_num)
+
+        c.setFillColor(COLOR_TEXT_GRAY)
+        c.setFont(KHMER, 8)
+        day_khmer = WEEKDAY_NAMES[d.weekday()]
+        c.drawCentredString(col_x + col_w / 2, col_top - 19 * mm, day_khmer)
+
+        c.setStrokeColor(COLOR_BORDER)
+        c.setLineWidth(0.3)
+        c.line(col_x + 2, day_header_y, col_x + col_w - 2, day_header_y)
+
+        events = events_by_date[d]
+        event_y = day_header_y - 4 * mm
+
+        for e in events:
+            category = e.get('category', '📌 ផ្សេងៗ')
+            base_color = CATEGORY_COLORS.get(category, HexColor("#00ACC1"))
+
+            if STATUS_DONE in e.get('status', ''):
+                base_color = STATUS_COLORS_PDF[STATUS_DONE]
+            elif STATUS_CANCEL in e.get('status', ''):
+                base_color = STATUS_COLORS_PDF[STATUS_CANCEL]
+
+            max_chars = max(int(col_w / (2.5 * mm)), 10)
+            event_lines = wrap_pdf_text(e['event'], max_chars)
+
+            line_h = 3.5 * mm
+            header_h = 5 * mm
+            box_h = header_h + (len(event_lines) * line_h) + 3 * mm
+            box_h = max(box_h, 12 * mm)
+
+            box_x = col_x + 2
+            box_y = event_y - box_h
+            box_w = col_w - 4
+
+            if box_y < columns_bottom + 2:
+                c.setFillColor(COLOR_TEXT_GRAY)
+                c.setFont(KHMER, 7)
+                remaining = len(events) - events.index(e)
+                c.drawString(col_x + 3, event_y - 3, f"+ {remaining} ទៀត...")
+                break
+
+            c.setFillColor(base_color)
+            c.setStrokeColor(base_color)
+            c.roundRect(box_x, box_y, box_w, box_h, 2 * mm, fill=1, stroke=1)
+
+            c.setFillColor(white)
+            c.setFont('Helvetica-Bold', 6.5)
+            c.drawString(box_x + 3 * mm, box_y + box_h - 3.5 * mm, f"#{e['id']}")
+
+            if e['time']:
+                c.setFont('Helvetica-Bold', 7)
+                c.drawRightString(box_x + box_w - 2 * mm,
+                                  box_y + box_h - 3.5 * mm,
+                                  f"🕐 {e['time']}")
+
+            c.setFont(KHMER, 7.5)
+            text_y = box_y + box_h - 7 * mm
+            for line in event_lines:
+                c.drawString(box_x + 3 * mm, text_y, line)
+                text_y -= line_h
+
+            event_y = box_y - 2 * mm
+
+    # Footer
+    c.setFillColor(COLOR_TEXT_GRAY)
+    c.setFont(KHMER, 8)
+    footer = f"Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
+    c.drawCentredString(PAGE_W / 2, 5 * mm, footer)
+
+    # Legend
+    legend_y = 8 * mm
+    legend_x = MARGIN
+    c.setFont(KHMER, 7)
+    legend_items = [
+        (HexColor("#4285F4"), "ការងារ"),
+        (HexColor("#EA4335"), "គ្រួសារ"),
+        (HexColor("#34A853"), "សុខភាព"),
+        (HexColor("#FBBC04"), "ព្រឹត្តិការណ៍"),
+        (HexColor("#9C27B0"), "សិក្សា"),
+    ]
+    for color, name in legend_items:
+        c.setFillColor(color)
+        c.rect(legend_x, legend_y, 3 * mm, 3 * mm, fill=1, stroke=0)
+        c.setFillColor(COLOR_TEXT_DARK)
+        c.drawString(legend_x + 4 * mm, legend_y + 0.5 * mm, name)
+        legend_x += 22 * mm
+
+    c.showPage()
+    c.save()
+    output.seek(0)
+    return output
+
+
+def generate_month_calendar_pdf(year=None, month=None):
+    """PDF Calendar ខែមួយ (Grid view)"""
+    now = datetime.now(TZ)
+    if year is None:
+        year = now.year
+    if month is None:
+        month = now.month
+
+    first_day = datetime(year, month, 1).date()
+    if month == 12:
+        last_day = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        last_day = datetime(year, month + 1, 1).date() - timedelta(days=1)
+
+    all_events = get_all_events()
+    events_by_date = defaultdict(list)
+    for e in all_events:
+        try:
+            d = datetime.strptime(e['date'], "%Y-%m-%d").date()
+            if first_day <= d <= last_day:
+                events_by_date[d].append(e)
+        except Exception:
+            pass
+
+    for d in events_by_date:
+        events_by_date[d].sort(key=lambda x: x['time'] or "99:99")
+
+    has_khmer = register_khmer_font_pdf()
+    KHMER = 'Khmer' if has_khmer else 'Helvetica'
+
+    output = BytesIO()
+    PAGE = landscape(A4)
+    PAGE_W, PAGE_H = PAGE
+    c = canvas.Canvas(output, pagesize=PAGE)
+
+    COLOR_HEADER = HexColor("#4285F4")
+    COLOR_WEEKEND = HexColor("#FFF3E0")
+    COLOR_TODAY = HexColor("#E3F2FD")
+    COLOR_OTHER_MONTH = HexColor("#F5F5F5")
+    COLOR_BORDER = HexColor("#DADCE0")
+    COLOR_TEXT_DARK = HexColor("#202124")
+    COLOR_TEXT_GRAY = HexColor("#5F6368")
+    COLOR_TEXT_RED = HexColor("#EA4335")
+
+    CATEGORY_COLORS = {
+        "🏢 ការងារ": HexColor("#4285F4"),
+        "👨‍👩‍👧 គ្រួសារ": HexColor("#EA4335"),
+        "💊 សុខភាព": HexColor("#34A853"),
+        "🎉 ព្រឹត្តិការណ៍": HexColor("#FBBC04"),
+        "📚 សិក្សា": HexColor("#9C27B0"),
+        "📌 ផ្សេងៗ": HexColor("#00ACC1"),
+    }
+
+    MARGIN = 15 * mm
+    HEADER_H = 30 * mm
+
+    c.setFillColor(COLOR_HEADER)
+    c.rect(0, PAGE_H - HEADER_H, PAGE_W, HEADER_H, fill=1, stroke=0)
+    c.setFillColor(white)
+    c.setFont(KHMER, 22)
+    title = f"📅 {KHMER_MONTHS_NAMES[month]} {year}"
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 18 * mm, title)
+
+    total = sum(len(events_by_date[d]) for d in events_by_date)
+    c.setFont(KHMER, 11)
+    c.drawCentredString(PAGE_W / 2, PAGE_H - 25 * mm,
+                        f"សរុប: {total} ព្រឹត្តិការណ៍")
+
+    grid_top = PAGE_H - HEADER_H - 5 * mm
+    grid_bottom = MARGIN
+    grid_left = MARGIN
+    grid_right = PAGE_W - MARGIN
+    grid_w = grid_right - grid_left
+
+    day_header_h = 8 * mm
+    grid_content_top = grid_top - day_header_h
+
+    weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+    col_w = grid_w / 7
+    for i, wd in enumerate(weekdays_en):
+        x = grid_left + i * col_w
+        c.setFillColor(COLOR_HEADER)
+        c.setFont('Helvetica-Bold', 10)
+        c.drawCentredString(x + col_w / 2, grid_top - 5 * mm, wd)
+
+    first_weekday = first_day.weekday()
+    total_days = (last_day - first_day).days + 1
+    total_cells = first_weekday + total_days
+    rows = (total_cells + 6) // 7
+
+    row_h = (grid_content_top - grid_bottom) / rows
+    today = datetime.now(TZ).date()
+
+    for cell_idx in range(rows * 7):
+        row = cell_idx // 7
+        col = cell_idx % 7
+        cell_x = grid_left + col * col_w
+        cell_y = grid_content_top - (row + 1) * row_h
+
+        day_offset = cell_idx - first_weekday
+        if 0 <= day_offset < total_days:
+            cell_date = first_day + timedelta(days=day_offset)
+            is_this_month = True
+        else:
+            if day_offset < 0:
+                cell_date = first_day + timedelta(days=day_offset)
+            else:
+                cell_date = last_day + timedelta(days=day_offset - total_days + 1)
+            is_this_month = False
+
+        is_weekend = cell_date.weekday() >= 5
+        is_today = cell_date == today
+
+        if not is_this_month:
+            c.setFillColor(COLOR_OTHER_MONTH)
+        elif is_today:
+            c.setFillColor(COLOR_TODAY)
+        elif is_weekend:
+            c.setFillColor(COLOR_WEEKEND)
+        else:
+            c.setFillColor(white)
+        c.rect(cell_x, cell_y, col_w, row_h, fill=1, stroke=0)
+
+        c.setStrokeColor(COLOR_BORDER)
+        c.setLineWidth(0.3)
+        c.rect(cell_x, cell_y, col_w, row_h, fill=0, stroke=1)
+
+        day_num = str(cell_date.day)
+        if is_today:
+            c.setFillColor(COLOR_HEADER)
+            c.circle(cell_x + 5 * mm, cell_y + row_h - 4 * mm, 3 * mm,
+                     fill=1, stroke=0)
+            c.setFillColor(white)
+            c.setFont('Helvetica-Bold', 9)
+            c.drawCentredString(cell_x + 5 * mm, cell_y + row_h - 5 * mm, day_num)
+        elif is_this_month:
+            c.setFillColor(COLOR_TEXT_RED if is_weekend else COLOR_TEXT_DARK)
+            c.setFont('Helvetica-Bold', 10)
+            c.drawString(cell_x + 2 * mm, cell_y + row_h - 5 * mm, day_num)
+        else:
+            c.setFillColor(HexColor("#BDBDBD"))
+            c.setFont('Helvetica', 9)
+            c.drawString(cell_x + 2 * mm, cell_y + row_h - 5 * mm, day_num)
+
+        if is_this_month and cell_date in events_by_date:
+            events = events_by_date[cell_date]
+            event_y = cell_y + row_h - 8 * mm
+            max_events = max(int((row_h - 10 * mm) / (3.5 * mm)), 1)
+
+            for i, e in enumerate(events[:max_events]):
+                category = e.get('category', '📌 ផ្សេងៗ')
+                color = CATEGORY_COLORS.get(category, HexColor("#00ACC1"))
+
+                pill_h = 3 * mm
+                c.setFillColor(color)
+                c.roundRect(cell_x + 1.5 * mm, event_y - pill_h,
+                            col_w - 3 * mm, pill_h, 0.5 * mm,
+                            fill=1, stroke=0)
+
+                c.setFillColor(white)
+                c.setFont(KHMER, 6)
+                display_text = e['event'][:15]
+                if e['time']:
+                    display_text = f"{e['time']} {display_text}"
+                c.drawString(cell_x + 2 * mm, event_y - pill_h + 0.8 * mm,
+                             display_text)
+
+                event_y -= (pill_h + 0.5 * mm)
+
+            if len(events) > max_events:
+                c.setFillColor(COLOR_TEXT_GRAY)
+                c.setFont(KHMER, 6)
+                c.drawString(cell_x + 2 * mm, event_y - 2 * mm,
+                             f"+ {len(events) - max_events} ទៀត")
+
+    c.setFillColor(COLOR_TEXT_GRAY)
+    c.setFont(KHMER, 8)
+    footer = f"Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
+    c.drawCentredString(PAGE_W / 2, 5 * mm, footer)
+
+    c.showPage()
+    c.save()
+    output.seek(0)
+    return output
 
 # ══════════════════════════════════════
 # Confirmation UI
@@ -1097,8 +1554,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⌨️ វាយអក្សរផ្ទាល់\n\n"
         "📋 *Commands:*\n"
         "/today - 📌 ព្រឹត្តិការណ៍ថ្ងៃនេះ\n"
-        "/week - 🖼 កាលវិភាគសប្តាហ៍\n"
-        "/nextweek - 🖼 សប្តាហ៍ក្រោយ\n"
+        "/week - 📄 កាលវិភាគសប្តាហ៍ (PDF)\n"
+        "/nextweek - 📄 សប្តាហ៍ក្រោយ (PDF)\n"
+        "/month - 📄 កាលវិភាគខែ (PDF)\n"
         "/calendar - 📅 ៣០ ថ្ងៃខាងមុខ\n"
         "/stats - 📊 ស្ថិតិខែនេះ\n"
         "/history - 📋 ១០ ចុងក្រោយ\n"
@@ -1143,32 +1601,52 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def week_command(update, context):
-    await update.message.reply_text("🎨 កំពុងបង្កើតរូបភាព...")
+    """សប្តាហ៍នេះ - PDF"""
+    await update.message.reply_text("📄 កំពុងបង្កើត PDF ស្អាតៗ...")
     try:
         today = datetime.now(TZ).date()
         monday = today - timedelta(days=today.weekday())
         loop = asyncio.get_event_loop()
-        img_bytes = await loop.run_in_executor(None, generate_week_calendar, monday)
+        pdf_bytes = await loop.run_in_executor(
+            None, generate_week_calendar_pdf, monday
+        )
         end = monday + timedelta(days=6)
+
+        pdf_bytes.name = f"week_{monday.strftime('%Y%m%d')}.pdf"
         caption = (f"📅 *កាលវិភាគសប្តាហ៍នេះ*\n"
                    f"📆 {monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}")
-        await update.message.reply_photo(photo=img_bytes, caption=caption, parse_mode="Markdown")
+        await update.message.reply_document(
+            document=InputFile(pdf_bytes, filename=pdf_bytes.name),
+            caption=caption,
+            parse_mode="Markdown"
+        )
     except Exception as e:
+        logger.error(f"Week PDF error: {e}")
         await update.message.reply_text(f"❌ {e}")
 
 
 async def nextweek_command(update, context):
-    await update.message.reply_text("🎨 កំពុងបង្កើតរូបភាព...")
+    """សប្តាហ៍ក្រោយ - PDF"""
+    await update.message.reply_text("📄 កំពុងបង្កើត PDF ស្អាតៗ...")
     try:
         today = datetime.now(TZ).date()
         monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
         loop = asyncio.get_event_loop()
-        img_bytes = await loop.run_in_executor(None, generate_week_calendar, monday)
+        pdf_bytes = await loop.run_in_executor(
+            None, generate_week_calendar_pdf, monday
+        )
         end = monday + timedelta(days=6)
+
+        pdf_bytes.name = f"week_{monday.strftime('%Y%m%d')}.pdf"
         caption = (f"📅 *កាលវិភាគសប្តាហ៍ក្រោយ*\n"
                    f"📆 {monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}")
-        await update.message.reply_photo(photo=img_bytes, caption=caption, parse_mode="Markdown")
+        await update.message.reply_document(
+            document=InputFile(pdf_bytes, filename=pdf_bytes.name),
+            caption=caption,
+            parse_mode="Markdown"
+        )
     except Exception as e:
+        logger.error(f"NextWeek PDF error: {e}")
         await update.message.reply_text(f"❌ {e}")
 
 
@@ -1387,7 +1865,36 @@ async def export_command(update, context):
         await update.message.reply_text(f"❌ {e}")
 
 
-async def sync_command(update, context):
+async def month_command(update, context):
+    """PDF Calendar ខែនេះ"""
+    await update.message.reply_text("📄 កំពុងបង្កើត PDF ខែ...")
+    try:
+        now = datetime.now(TZ)
+        year = now.year
+        month = now.month
+        if context.args:
+            try:
+                parts = context.args[0].split("-")
+                year = int(parts[0])
+                month = int(parts[1])
+            except Exception:
+                pass
+
+        loop = asyncio.get_event_loop()
+        pdf_bytes = await loop.run_in_executor(
+            None, generate_month_calendar_pdf, year, month
+        )
+        pdf_bytes.name = f"month_{year}_{month:02d}.pdf"
+        caption = f"📅 *កាលវិភាគខែ {KHMER_MONTHS_NAMES[month]} {year}*"
+        await update.message.reply_document(
+            document=InputFile(pdf_bytes, filename=pdf_bytes.name),
+            caption=caption,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Month PDF error: {e}")
+        await update.message.reply_text(f"❌ {e}")
+
     """Manual sync ពី Google Calendar"""
     await update.message.reply_text("🔄 កំពុង sync ពី Google Calendar...")
     try:
@@ -1522,20 +2029,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════
 
 async def send_weekly_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Friday 8 AM reminder"""
-    logger.info("🔔 Weekly reminder...")
+    """Friday 8AM - ផ្ញើ PDF Calendar"""
+    logger.info("🔔 Weekly PDF reminder...")
     if not CHAT_ID:
         return
     try:
         today = datetime.now(TZ).date()
         next_monday = today + timedelta(days=(7 - today.weekday()))
         loop = asyncio.get_event_loop()
-        img_bytes = await loop.run_in_executor(None, generate_week_calendar, next_monday)
+        pdf_bytes = await loop.run_in_executor(
+            None, generate_week_calendar_pdf, next_monday
+        )
         end = next_monday + timedelta(days=6)
+
+        pdf_bytes.name = f"week_{next_monday.strftime('%Y%m%d')}.pdf"
         caption = (f"🔔 *រំលឹកកាលវិភាគសប្តាហ៍ក្រោយ*\n\n"
-                   f"📅 {next_monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}")
-        await context.bot.send_photo(chat_id=CHAT_ID, photo=img_bytes,
-                                     caption=caption, parse_mode="Markdown")
+                   f"📅 {next_monday.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')}\n\n"
+                   f"💡 សូមរៀបចំខ្លួនសម្រាប់សប្តាហ៍ថ្មី!")
+        await context.bot.send_document(
+            chat_id=CHAT_ID,
+            document=InputFile(pdf_bytes, filename=pdf_bytes.name),
+            caption=caption,
+            parse_mode="Markdown"
+        )
+        logger.info("✅ Weekly PDF sent!")
     except Exception as e:
         logger.error(f"Weekly reminder error: {e}")
 
@@ -1669,6 +2186,7 @@ def run_bot():
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("sort", sort_command))
     app.add_handler(CommandHandler("export", export_command))
+​​    app.add_handler(CommandHandler("month", month_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
