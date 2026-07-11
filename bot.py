@@ -915,6 +915,7 @@ body {{
     font-size: 8.5pt;
     line-height: 1.35;
     word-break: break-word;
+    overflow-wrap: break-word;
 }}
 
 .footer {{
