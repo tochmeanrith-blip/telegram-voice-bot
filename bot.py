@@ -16,27 +16,37 @@ from google import genai
 from google.genai import types
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    InputFile
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes,
 )
-from flask import Flask
+from flask import Flask, Response
 
 from khmer_font import get_khmer_font
 
-# ─── Environment ───
+# ══════════════════════════════════════
+# Environment Variables
+# ══════════════════════════════════════
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
+GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 CHAT_ID = os.environ.get("CHAT_ID")
+CALENDAR_SECRET = os.environ.get("CALENDAR_SECRET", "changeme")
 PORT = int(os.environ.get("PORT", 10000))
 
 TZ = pytz.timezone("Asia/Phnom_Penh")
+
+# ══════════════════════════════════════
+# Logging
+# ══════════════════════════════════════
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -44,37 +54,54 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─── Gemini ───
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-logger.info("Gemini configured!")
+# ══════════════════════════════════════
+# Gemini Setup
+# ══════════════════════════════════════
 
-# ─── Google Sheets ───
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+logger.info("✅ Gemini configured!")
+
+# ══════════════════════════════════════
+# Google Services Setup
+# ══════════════════════════════════════
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/calendar",
 ]
+
 credentials_info = json.loads(GOOGLE_CREDENTIALS)
 creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
+
+# Sheets
 gc = gspread.authorize(creds)
 spreadsheet = gc.open_by_key(GOOGLE_SHEET_ID)
 worksheet = spreadsheet.sheet1
 
-# ✅ 7 Columns
+# Calendar
+calendar_service = build('calendar', 'v3', credentials=creds)
+logger.info(f"✅ Google Calendar: {GOOGLE_CALENDAR_ID}")
+
+# ══════════════════════════════════════
+# Sheet Headers (8 columns)
+# ══════════════════════════════════════
+
 HEADERS = [
     "#", "កាលបរិច្ឆេទ", "ម៉ោងព្រឹត្តិការណ៍",
-    "ព្រឹត្តិការណ៍", "ប្រភេទ", "ស្ថានភាព", "ម៉ោងបញ្ចូល"
+    "ព្រឹត្តិការណ៍", "ប្រភេទ", "ស្ថានភាព",
+    "ម៉ោងបញ្ចូល", "GCal_ID"
 ]
 
 try:
     header = worksheet.row_values(1)
     if not header or header != HEADERS:
-        worksheet.update("A1:G1", [HEADERS])
-        logger.info("Headers updated to v2.0")
+        worksheet.update("A1:H1", [HEADERS])
+        logger.info("✅ Headers updated to v3.0")
 except Exception as e:
     logger.error(f"Header error: {e}")
 
-logger.info("Sheet connected!")
-
+logger.info("✅ Sheet connected!")
 
 # ══════════════════════════════════════
 # Constants
@@ -87,15 +114,6 @@ KHMER_MONTHS = {
 }
 KHMER_MONTHS_NAMES = {v: k for k, v in KHMER_MONTHS.items()}
 
-KHMER_RELATIVE_DAYS = {
-    "ថ្ងៃនេះ": 0, "ថ្ងៃស្អែក": 1, "ខានស្អែក": 2,
-    "ម្សិលមិញ": -1, "ម្សិលម៉្ង": -2,
-}
-KHMER_WEEKDAYS = {
-    "ថ្ងៃច័ន្ទ": 0, "ថ្ងៃអង្គារ": 1, "ថ្ងៃពុធ": 2,
-    "ថ្ងៃព្រហស្បតិ៍": 3, "ថ្ងៃសុក្រ": 4,
-    "ថ្ងៃសៅរ៍": 5, "ថ្ងៃអាទិត្យ": 6,
-}
 WEEKDAY_NAMES = {
     0: "ច័ន្ទ", 1: "អង្គារ", 2: "ពុធ",
     3: "ព្រហស្បតិ៍", 4: "សុក្រ", 5: "សៅរ៍", 6: "អាទិត្យ",
@@ -104,9 +122,7 @@ WEEKDAY_SHORT = {
     0: "MON", 1: "TUE", 2: "WED",
     3: "THU", 4: "FRI", 5: "SAT", 6: "SUN",
 }
-KHMER_DIGITS = str.maketrans("០១២៣៤៥៦៧៨៩", "0123456789")
 
-# ✅ Categories
 CATEGORIES = {
     "work": "🏢 ការងារ",
     "family": "👨‍👩‍👧 គ្រួសារ",
@@ -116,47 +132,44 @@ CATEGORIES = {
     "other": "📌 ផ្សេងៗ",
 }
 
-# ✅ Status
 STATUS_PENDING = "⏳ រង់ចាំ"
 STATUS_DONE = "✅ រួចរាល់"
 STATUS_CANCEL = "❌ បោះបង់"
 
-# ✅ Recurring keywords
-RECURRING_KEYWORDS = {
-    "រៀងរាល់ថ្ងៃច័ន្ទ": 0, "រាល់ថ្ងៃច័ន្ទ": 0,
-    "រៀងរាល់ថ្ងៃអង្គារ": 1, "រាល់ថ្ងៃអង្គារ": 1,
-    "រៀងរាល់ថ្ងៃពុធ": 2, "រាល់ថ្ងៃពុធ": 2,
-    "រៀងរាល់ថ្ងៃព្រហស្បតិ៍": 3, "រាល់ថ្ងៃព្រហស្បតិ៍": 3,
-    "រៀងរាល់ថ្ងៃសុក្រ": 4, "រាល់ថ្ងៃសុក្រ": 4,
-    "រៀងរាល់ថ្ងៃសៅរ៍": 5, "រាល់ថ្ងៃសៅរ៍": 5,
-    "រៀងរាល់ថ្ងៃអាទិត្យ": 6, "រាល់ថ្ងៃអាទិត្យ": 6,
-}
-
-# Temporary storage for pending confirmations
-pending_events = {}  # {chat_id: {date, time, event, category, ...}}
+# Pending confirmations
+pending_events = {}
 
 
 # ══════════════════════════════════════
-# Helpers
+# Utilities
 # ══════════════════════════════════════
-
-def khmer_to_arabic(text):
-    return text.translate(KHMER_DIGITS)
-
 
 def similarity(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
+def detect_category(text):
+    """Auto-detect category from text"""
+    text_lower = text.lower()
+    if any(w in text_lower for w in ["meeting", "ប្រជុំ", "work", "office", "ការងារ", "deadline"]):
+        return "work"
+    if any(w in text_lower for w in ["family", "គ្រួសារ", "កូន", "ម្តាយ", "ឪពុក", "បងប្អូន"]):
+        return "family"
+    if any(w in text_lower for w in ["doctor", "hospital", "មន្ទីរពេទ្យ", "គ្រូពេទ្យ", "ថ្នាំ", "សុខភាព"]):
+        return "health"
+    if any(w in text_lower for w in ["party", "birthday", "ខួប", "ពិធី", "រៀបការ", "បុណ្យ"]):
+        return "event"
+    if any(w in text_lower for w in ["class", "study", "រៀន", "សិក្សា", "ថ្នាក់", "ប្រឡង"]):
+        return "study"
+    return "other"
+
+
 # ══════════════════════════════════════
-# AI Parser (Enhanced with time, category, recurring)
+# AI Parser
 # ══════════════════════════════════════
 
 def parse_with_ai(text):
-    """
-    Parse text ជាមួយ Gemini
-    Returns dict: {date, time, event, category, is_recurring, recurring_day}
-    """
+    """Parse Khmer text ជាមួយ Gemini"""
     try:
         today = datetime.now(TZ).strftime("%Y-%m-%d")
         weekday_today = WEEKDAY_NAMES[datetime.now(TZ).weekday()]
@@ -168,27 +181,27 @@ def parse_with_ai(text):
 សូមបំបែកអត្ថបទជា JSON:
 {{
   "date": "YYYY-MM-DD",
-  "time": "HH:MM" ឬ "" (បើគ្មាន),
-  "event": "ព្រឹត្តិការណ៍តែប៉ុណ្ណោះ (កាត់ចេញ date/time)",
+  "time": "HH:MM" ឬ "",
+  "event": "ព្រឹត្តិការណ៍តែប៉ុណ្ណោះ",
   "category": "work|family|health|event|study|other",
   "is_recurring": true/false,
-  "recurring_day": 0-6 (Monday=0) ឬ null
+  "recurring_day": 0-6 ឬ null
 }}
 
-ច្បាប់ការវិភាគ:
-1. Date: បើគ្មាន → ប្រើ {today}
-2. Time: "៩ ព្រឹក"→"09:00", "២ រសៀល"→"14:00", "៦ ល្ងាច"→"18:00", "៨ យប់"→"20:00"
+ច្បាប់:
+1. Date: បើគ្មាន → {today}
+2. Time: "៩ ព្រឹក"→"09:00", "២ រសៀល"→"14:00", "៦ ល្ងាច"→"18:00"
 3. Category:
-   - work: ប្រជុំ, ការងារ, office, meeting, deadline
-   - family: គ្រួសារ, កូន, ម្តាយ, ឪពុក, បងប្អូន
-   - health: មន្ទីរពេទ្យ, គ្រូពេទ្យ, ថ្នាំ, ពិនិត្យសុខភាព
-   - event: ពិធី, ខួប, រៀបការ, បុណ្យ, party
-   - study: រៀន, សិក្សា, ថ្នាក់, ប្រឡង, class
+   - work: ប្រជុំ, ការងារ, meeting
+   - family: គ្រួសារ, កូន, ម្តាយ, ឪពុក
+   - health: មន្ទីរពេទ្យ, គ្រូពេទ្យ, ថ្នាំ
+   - event: ខួប, ពិធី, បុណ្យ, រៀបការ
+   - study: រៀន, សិក្សា, ថ្នាក់, ប្រឡង
    - other: ផ្សេងទៀត
-4. Recurring: បើមាន "រៀងរាល់", "រាល់ថ្ងៃ..." → is_recurring=true, recurring_day=លេខថ្ងៃ
-5. Event ត្រូវរក្សាអត្ថន័យ តែកាត់ date/time words ចេញ
+4. Recurring: "រៀងរាល់ថ្ងៃ..." → is_recurring=true
+5. Event ត្រូវកាត់ date/time words ចេញ
 
-ឆ្លើយតែ JSON, គ្មានពាក្យបន្ថែម។
+ឆ្លើយតែ JSON។
 
 អត្ថបទ: "{text}"
 
@@ -203,8 +216,6 @@ JSON:"""
         result = re.sub(r"^```\s*|\s*```$", "", result).strip()
 
         data = json.loads(result)
-
-        # Validate & set defaults
         date_str = data.get("date", today).strip()
         try:
             datetime.strptime(date_str, "%Y-%m-%d")
@@ -225,33 +236,48 @@ JSON:"""
             "date": datetime.now(TZ).strftime("%Y-%m-%d"),
             "time": "",
             "event": text,
-            "category": "other",
+            "category": detect_category(text),
             "is_recurring": False,
             "recurring_day": None,
         }
 
 
 # ══════════════════════════════════════
-# Sheet Operations (v2.0 - 7 columns)
+# Sheet Operations
 # ══════════════════════════════════════
 
-def save_to_sheet(date_str, time_str, event, category_key, status=None):
-    """✅ v2.0: 7 columns"""
+def save_to_sheet(date_str, time_str, event, category_key, gcal_id=""):
+    """Save event ចូល Sheet"""
     now = datetime.now(TZ)
     created = now.strftime("%Y-%m-%d %H:%M:%S")
     all_values = worksheet.get_all_values()
-    row_num = len(all_values)  # ID
+    row_num = len(all_values)
     category = CATEGORIES.get(category_key, CATEGORIES["other"])
-    status = status or STATUS_PENDING
-    new_row = [row_num, date_str, time_str, event, category, status, created]
+    new_row = [
+        row_num, date_str, time_str, event,
+        category, STATUS_PENDING, created, gcal_id
+    ]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
     return row_num
 
 
 def delete_row(row_num):
+    """លុប row + លុប Google Calendar event"""
     all_values = worksheet.get_all_values()
     for idx, row in enumerate(all_values[1:], start=2):
         if row and str(row[0]) == str(row_num):
+            # Delete from Google Calendar first
+            gcal_id = row[7] if len(row) > 7 else ""
+            if gcal_id:
+                try:
+                    calendar_service.events().delete(
+                        calendarId=GOOGLE_CALENDAR_ID,
+                        eventId=gcal_id
+                    ).execute()
+                    logger.info(f"Deleted gcal: {gcal_id}")
+                except Exception as e:
+                    logger.warning(f"Gcal delete failed: {e}")
+            
             worksheet.delete_rows(idx)
             renumber_rows()
             return True
@@ -259,9 +285,7 @@ def delete_row(row_num):
 
 
 def edit_row(row_num, field, new_value):
-    """
-    field: 'date'(2), 'time'(3), 'event'(4), 'category'(5), 'status'(6)
-    """
+    """Edit field: date(2), time(3), event(4), category(5), status(6)"""
     field_map = {"date": 2, "time": 3, "event": 4, "category": 5, "status": 6}
     col = field_map.get(field)
     if not col:
@@ -280,41 +304,52 @@ def renumber_rows():
         worksheet.update_cell(idx + 1, 1, idx)
 
 
+def update_gcal_id(row_num, gcal_id):
+    """Update Column H (GCal_ID)"""
+    all_values = worksheet.get_all_values()
+    for idx, row in enumerate(all_values[1:], start=2):
+        if row and str(row[0]) == str(row_num):
+            worksheet.update_cell(idx, 8, gcal_id)
+            return True
+    return False
+
+
 def get_all_events():
-    """✅ v2.0: 7 fields"""
+    """ទាញ events ទាំងអស់"""
     all_values = worksheet.get_all_values()
     events = []
     for row in all_values[1:]:
         if len(row) >= 4 and row[0]:
             events.append({
                 "id": row[0],
-                "date": row[1],
+                "date": row[1] if len(row) > 1 else "",
                 "time": row[2] if len(row) > 2 else "",
                 "event": row[3] if len(row) > 3 else "",
                 "category": row[4] if len(row) > 4 else CATEGORIES["other"],
                 "status": row[5] if len(row) > 5 else STATUS_PENDING,
                 "created": row[6] if len(row) > 6 else "",
+                "gcal_id": row[7] if len(row) > 7 else "",
             })
     return events
 
 
 def sort_sheet_by_date():
-    """✅ Sort sheet by date ascending"""
+    """Sort sheet by date ascending"""
     try:
         all_values = worksheet.get_all_values()
         if len(all_values) <= 1:
-            return
+            return False
         header = all_values[0]
         data = all_values[1:]
-        # Sort by date (Column B, index 1)
-        data.sort(key=lambda x: (x[1] if len(x) > 1 else "", x[2] if len(x) > 2 else ""))
-        # Renumber
+        data.sort(key=lambda x: (
+            x[1] if len(x) > 1 else "",
+            x[2] if len(x) > 2 else ""
+        ))
         for idx, row in enumerate(data, start=1):
             row[0] = str(idx)
-        # Write back
         worksheet.clear()
         worksheet.update("A1", [header] + data)
-        logger.info("Sheet sorted by date")
+        logger.info("✅ Sheet sorted")
         return True
     except Exception as e:
         logger.error(f"Sort error: {e}")
@@ -322,21 +357,196 @@ def sort_sheet_by_date():
 
 
 def find_duplicates(date_str, event, threshold=0.75):
-    """✅ Detect similar events on same date"""
+    """Detect similar events same date"""
     events = get_all_events()
-    duplicates = []
-    for e in events:
-        if e['date'] == date_str:
-            if similarity(e['event'].lower(), event.lower()) >= threshold:
-                duplicates.append(e)
-    return duplicates
+    return [
+        e for e in events
+        if e['date'] == date_str
+        and similarity(e['event'].lower(), event.lower()) >= threshold
+    ]
 
 
 def search_events(keyword):
-    """✅ Search events by keyword"""
     events = get_all_events()
     keyword_lower = keyword.lower()
     return [e for e in events if keyword_lower in e['event'].lower()]
+
+
+# ══════════════════════════════════════
+# Google Calendar Sync
+# ══════════════════════════════════════
+
+def get_calendar_events(days_back=7, days_forward=90):
+    """ទាញ events ពី Google Calendar"""
+    try:
+        now = datetime.now(TZ)
+        time_min = (now - timedelta(days=days_back)).isoformat()
+        time_max = (now + timedelta(days=days_forward)).isoformat()
+
+        result = calendar_service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy='startTime',
+            maxResults=250,
+        ).execute()
+
+        return result.get('items', [])
+    except HttpError as e:
+        logger.error(f"Calendar API error: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Get calendar events error: {e}")
+        return []
+
+
+def parse_gcal_event(gcal_event):
+    """Parse Google Calendar event → dict"""
+    try:
+        gcal_id = gcal_event.get('id', '')
+        summary = gcal_event.get('summary', '(គ្មានចំណងជើង)')
+        description = gcal_event.get('description', '')
+
+        start = gcal_event.get('start', {})
+        if 'dateTime' in start:
+            dt = datetime.fromisoformat(start['dateTime'].replace('Z', '+00:00'))
+            dt_local = dt.astimezone(TZ)
+            date_str = dt_local.strftime("%Y-%m-%d")
+            time_str = dt_local.strftime("%H:%M")
+        elif 'date' in start:
+            date_str = start['date']
+            time_str = ""
+        else:
+            return None
+
+        category = detect_category(summary + " " + description)
+
+        return {
+            "gcal_id": gcal_id,
+            "date": date_str,
+            "time": time_str,
+            "event": summary,
+            "category": category,
+        }
+    except Exception as e:
+        logger.warning(f"Parse gcal event error: {e}")
+        return None
+
+
+def get_synced_gcal_ids():
+    """List of synced GCal IDs from Sheet"""
+    try:
+        all_values = worksheet.get_all_values()
+        return {row[7] for row in all_values[1:] if len(row) > 7 and row[7]}
+    except Exception:
+        return set()
+
+
+def save_gcal_to_sheet(gcal_data):
+    """Save gcal event ចូល Sheet"""
+    return save_to_sheet(
+        gcal_data['date'],
+        gcal_data['time'],
+        gcal_data['event'],
+        gcal_data['category'],
+        gcal_id=gcal_data['gcal_id']
+    )
+
+
+def update_sheet_from_gcal(gcal_id, gcal_data):
+    """Update row from gcal changes"""
+    try:
+        all_values = worksheet.get_all_values()
+        for idx, row in enumerate(all_values[1:], start=2):
+            if len(row) > 7 and row[7] == gcal_id:
+                worksheet.update(f"B{idx}:E{idx}", [[
+                    gcal_data['date'],
+                    gcal_data['time'],
+                    gcal_data['event'],
+                    CATEGORIES.get(gcal_data['category'], CATEGORIES["other"]),
+                ]])
+                return True
+        return False
+    except Exception as e:
+        logger.error(f"Update from gcal error: {e}")
+        return False
+
+
+def sync_from_google_calendar():
+    """Pull events ពី Google Calendar → Sheet"""
+    try:
+        logger.info("🔄 Syncing from Google Calendar...")
+        gcal_events = get_calendar_events()
+        if not gcal_events:
+            return 0, 0
+
+        synced_ids = get_synced_gcal_ids()
+        added = 0
+        updated = 0
+
+        for gcal_event in gcal_events:
+            data = parse_gcal_event(gcal_event)
+            if not data:
+                continue
+
+            if data['gcal_id'] in synced_ids:
+                if update_sheet_from_gcal(data['gcal_id'], data):
+                    updated += 1
+            else:
+                save_gcal_to_sheet(data)
+                added += 1
+                logger.info(f"➕ Added from gcal: {data['event']}")
+
+        logger.info(f"✅ Sync: +{added} new, ~{updated} updated")
+        return added, updated
+    except Exception as e:
+        logger.error(f"Sync error: {e}")
+        return 0, 0
+
+
+def push_to_google_calendar(date_str, time_str, event, category):
+    """Push event ទៅ Google Calendar"""
+    try:
+        if time_str:
+            start_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+            end_dt = start_dt + timedelta(hours=1)
+            event_body = {
+                'summary': event,
+                'description': f"🏷 {category}\n\n📱 From Voice Tracker Bot",
+                'start': {
+                    'dateTime': start_dt.strftime("%Y-%m-%dT%H:%M:00"),
+                    'timeZone': 'Asia/Phnom_Penh',
+                },
+                'end': {
+                    'dateTime': end_dt.strftime("%Y-%m-%dT%H:%M:00"),
+                    'timeZone': 'Asia/Phnom_Penh',
+                },
+                'reminders': {
+                    'useDefault': False,
+                    'overrides': [
+                        {'method': 'popup', 'minutes': 60},
+                        {'method': 'popup', 'minutes': 1440},
+                    ],
+                },
+            }
+        else:
+            event_body = {
+                'summary': event,
+                'description': f"🏷 {category}",
+                'start': {'date': date_str},
+                'end': {'date': date_str},
+            }
+
+        result = calendar_service.events().insert(
+            calendarId=GOOGLE_CALENDAR_ID,
+            body=event_body
+        ).execute()
+        logger.info(f"➡️ Pushed to gcal: {event}")
+        return result.get('id')
+    except Exception as e:
+        logger.error(f"Push to gcal error: {e}")
+        return None
 
 
 # ══════════════════════════════════════
@@ -376,8 +586,8 @@ def extract_from_image(file_path):
     models = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-flash-lite-latest"]
     prompt = (
         "សូមមើលរូបភាពនេះ ហើយស្រង់យក JSON:\n"
-        '{"date": "YYYY-MM-DD", "time": "HH:MM" ឬ "", "event": "ការពិពណ៌នាជាភាសាខ្មែរ"}\n'
-        "បើគ្មានកាលបរិច្ឆេទ, ប្រើថ្ងៃនេះ។ Return ONLY JSON."
+        '{"date": "YYYY-MM-DD", "time": "HH:MM" ឬ "", "event": "ការពិពណ៌នា"}\n'
+        "បើគ្មានកាលបរិច្ឆេទ ប្រើថ្ងៃនេះ។ Return ONLY JSON."
     )
     try:
         with open(file_path, "rb") as f:
@@ -418,18 +628,16 @@ def extract_from_image(file_path):
 
 
 # ══════════════════════════════════════
-# 🎨 Calendar Image (unchanged - works with new schema)
+# Calendar Image Generation
 # ══════════════════════════════════════
 
 def wrap_text(text, font, max_width, draw):
     lines = []
-    words = list(text)
     current_line = ""
-    for char in words:
+    for char in list(text):
         test_line = current_line + char
         bbox = draw.textbbox((0, 0), test_line, font=font)
-        w = bbox[2] - bbox[0]
-        if w <= max_width:
+        if (bbox[2] - bbox[0]) <= max_width:
             current_line = test_line
         else:
             if current_line:
@@ -457,7 +665,6 @@ def generate_week_calendar(start_date=None):
         except Exception:
             pass
 
-    # Sort by time then id
     for d in events_by_date:
         events_by_date[d].sort(
             key=lambda x: (x['time'] or "99:99",
@@ -596,7 +803,6 @@ def generate_week_calendar(start_date=None):
 
         for j, e in enumerate(events):
             color = EVENT_COLORS[j % len(EVENT_COLORS)]
-            # Color by status
             if STATUS_DONE in e.get('status', ''):
                 color = STATUS_COLORS[STATUS_DONE]
             elif STATUS_CANCEL in e.get('status', ''):
@@ -613,7 +819,6 @@ def generate_week_calendar(start_date=None):
             draw.rectangle([box_x, event_y, box_x + box_w, event_y + box_h],
                            fill=color)
 
-            # Top row: #ID + time
             id_text = f"#{e['id']}"
             time_text = f"🕐 {e['time']}" if e['time'] else ""
             draw.text((box_x + EVENT_PADDING, event_y + 5), id_text,
@@ -624,7 +829,6 @@ def generate_week_calendar(start_date=None):
                 draw.text((box_x + box_w - tw - EVENT_PADDING, event_y + 4),
                           time_text, font=font_time, fill=TEXT_WHITE)
 
-            # Event lines
             text_y = event_y + 22
             for line in lines:
                 draw.text((box_x + EVENT_PADDING, text_y), line,
@@ -634,7 +838,7 @@ def generate_week_calendar(start_date=None):
             event_y += box_h + EVENT_GAP
 
     footer_y = HEIGHT - 28
-    footer_text = f"Voice Tracker Bot • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
+    footer_text = f"Voice Tracker Bot v3.0 • {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
     draw.text((30, footer_y), footer_text, font=font_small, fill=TEXT_GRAY)
 
     output = BytesIO()
@@ -644,11 +848,11 @@ def generate_week_calendar(start_date=None):
 
 
 # ══════════════════════════════════════
-# 📅 ICS Export
+# ICS Export
 # ══════════════════════════════════════
 
 def generate_ics(events):
-    """✅ Generate .ics calendar file"""
+    """Generate .ics calendar file"""
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -686,35 +890,14 @@ def generate_ics(events):
                 "END:VEVENT",
             ])
         except Exception as ex:
-            logger.warning(f"ICS skip event {e.get('id')}: {ex}")
+            logger.warning(f"ICS skip #{e.get('id')}: {ex}")
 
     lines.append("END:VCALENDAR")
     return "\n".join(lines).encode("utf-8")
 
 
 # ══════════════════════════════════════
-# 🔊 TTS (Voice Reply)
-# ══════════════════════════════════════
-
-def generate_tts_khmer(text):
-    """
-    ព្យាយាមប្រើ Gemini TTS ឬ fallback ទៅ gTTS
-    Returns BytesIO ឬ None
-    """
-    try:
-        from gtts import gTTS
-        tts = gTTS(text=text, lang="km", slow=False)
-        buf = BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        return buf
-    except Exception as e:
-        logger.warning(f"TTS error: {e}")
-        return None
-
-
-# ══════════════════════════════════════
-# 🎯 Confirmation Flow
+# Confirmation UI
 # ══════════════════════════════════════
 
 def build_confirmation_keyboard(chat_id):
@@ -762,11 +945,9 @@ def format_preview(data):
 
 
 async def show_confirmation(update_or_msg, chat_id, data, original_text=""):
-    """Show preview + buttons"""
     pending_events[chat_id] = data
     text = format_preview(data)
 
-    # Duplicate warning
     dups = find_duplicates(data['date'], data['event'])
     if dups:
         text += f"\n⚠️ *ស្រដៀងគ្នា ({len(dups)}):*\n"
@@ -790,51 +971,74 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     parts = query.data.split(":")
     action = parts[0]
+
+    # Status change (from /status command)
+    if action == "setstatus":
+        row_num = parts[1]
+        status_key = parts[2]
+        status_map = {
+            "pending": STATUS_PENDING,
+            "done": STATUS_DONE,
+            "cancel": STATUS_CANCEL,
+        }
+        new_status = status_map.get(status_key, STATUS_PENDING)
+        if edit_row(row_num, "status", new_status):
+            await query.edit_message_text(f"✅ ស្ថានភាព #{row_num} → {new_status}")
+        else:
+            await query.edit_message_text(f"❌ រកមិនឃើញ #{row_num}")
+        return
+
     chat_id = int(parts[1])
 
     if chat_id not in pending_events:
-        # Handle status change from history: setstatus:ID:status
-        if action == "setstatus":
-            row_num = parts[1]
-            status_key = parts[2]
-            status_map = {
-                "pending": STATUS_PENDING,
-                "done": STATUS_DONE,
-                "cancel": STATUS_CANCEL,
-            }
-            new_status = status_map.get(status_key, STATUS_PENDING)
-            if edit_row(row_num, "status", new_status):
-                await query.edit_message_text(f"✅ ស្ថានភាព #{row_num} → {new_status}")
-            else:
-                await query.edit_message_text(f"❌ រកមិនឃើញ #{row_num}")
-            return
-        await query.edit_message_text("❌ អស់សុពលភាព (បានផុតកំណត់)")
+        await query.edit_message_text("❌ អស់សុពលភាព")
         return
 
     data = pending_events[chat_id]
 
     if action == "save":
+        # Save to Sheet
         row_num = save_to_sheet(
-            data['date'], data['time'], data['event'],
-            data['category']
+            data['date'], data['time'], data['event'], data['category']
         )
 
-        # Recurring: create multiple events
+        # Push to Google Calendar
+        try:
+            category_name = CATEGORIES.get(data['category'], CATEGORIES["other"])
+            gcal_id = push_to_google_calendar(
+                data['date'], data['time'], data['event'], category_name
+            )
+            if gcal_id:
+                update_gcal_id(row_num, gcal_id)
+        except Exception as e:
+            logger.warning(f"Auto-push failed: {e}")
+
+        # Recurring events
         extra_count = 0
         if data.get('is_recurring') and data.get('recurring_day') is not None:
             base_date = datetime.strptime(data['date'], "%Y-%m-%d").date()
-            for w in range(1, 9):  # add 8 weeks
+            for w in range(1, 9):
                 next_date = base_date + timedelta(weeks=w)
-                save_to_sheet(
+                new_row = save_to_sheet(
                     next_date.strftime("%Y-%m-%d"),
                     data['time'], data['event'], data['category']
                 )
+                try:
+                    gid = push_to_google_calendar(
+                        next_date.strftime("%Y-%m-%d"),
+                        data['time'], data['event'], category_name
+                    )
+                    if gid:
+                        update_gcal_id(new_row, gid)
+                except Exception:
+                    pass
                 extra_count += 1
 
         pending_events.pop(chat_id, None)
         msg = f"✅ *រក្សាទុក!* `#{row_num}`\n"
         msg += f"📅 {data['date']} {data['time']}\n"
         msg += f"📝 {data['event']}\n"
+        msg += f"🔗 Synced ទៅ Google Calendar"
         if extra_count:
             msg += f"\n🔁 បន្ថែម {extra_count} events (recurring)"
         await query.edit_message_text(msg, parse_mode="Markdown")
@@ -868,25 +1072,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action in ("editdate", "edittime", "editevent"):
         field_map = {
             "editdate": ("date", "កាលបរិច្ឆេទ (YYYY-MM-DD)"),
-            "edittime": ("time", "ម៉ោង (HH:MM ឬ វាយ 'គ្មាន')"),
+            "edittime": ("time", "ម៉ោង (HH:MM ឬ 'គ្មាន')"),
             "editevent": ("event", "ព្រឹត្តិការណ៍ថ្មី"),
         }
         field, label = field_map[action]
         context.user_data['editing_field'] = field
         context.user_data['editing_chat'] = chat_id
         await query.edit_message_text(
-            f"✏️ សូមវាយ *{label}* ថ្មី:\n(ឬវាយ /cancel ដើម្បីបោះបង់)",
+            f"✏️ សូមវាយ *{label}* ថ្មី:\n(ឬវាយ /cancel)",
             parse_mode="Markdown"
         )
 
 
 # ══════════════════════════════════════
-# Telegram Command Handlers
+# Command Handlers
 # ══════════════════════════════════════
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = (
-        "🎙️ *Voice Tracker Bot v2.0*\n\n"
+        "🎙️ *Voice Tracker Bot v3.0*\n\n"
         "📌 *របៀបប្រើ:*\n"
         "🎤 ផ្ញើសំឡេងខ្មែរ\n"
         "📸 ផ្ញើរូបភាព\n"
@@ -900,13 +1104,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/history - 📋 ១០ ចុងក្រោយ\n"
         "/search <ពាក្យ> - 🔍 ស្វែងរក\n"
         "/status <លេខ> - 📊 កែស្ថានភាព\n"
-        "/delete <លេខ> - 🗑 លុប\n"
         "/edit <លេខ> <អត្ថបទ> - ✏️ កែ\n"
+        "/delete <លេខ> - 🗑 លុប\n"
         "/sort - 📶 រៀបតាមកាលបរិច្ឆេទ\n"
+        "/sync - 🔄 Sync ពី Google Calendar\n"
         "/export - 📥 Export .ics\n"
         "/help - 📖 ជំនួយ\n\n"
-        "🔔 _រំលឹករៀងរាល់ថ្ងៃសុក្រ ៨:០០ ព្រឹក_\n"
-        "🔔 _រំលឹកមុន event ១ ថ្ងៃ + ១ ម៉ោង_"
+        "🔄 *Auto Sync:*\n"
+        "_Google Calendar ⇄ Bot រៀងរាល់ ១៥ នាទី_\n\n"
+        "🔔 *Reminders:*\n"
+        "_• រៀងរាល់ថ្ងៃសុក្រ ៨:០០ ព្រឹក_\n"
+        "_• ១ ថ្ងៃមុន event_\n"
+        "_• ១ ម៉ោងមុន event_"
     )
     await update.message.reply_text(welcome, parse_mode="Markdown")
 
@@ -1078,7 +1287,7 @@ async def delete_command(update, context):
             return
         row_num = context.args[0]
         if delete_row(row_num):
-            await update.message.reply_text(f"✅ លុប #{row_num}!")
+            await update.message.reply_text(f"✅ លុប #{row_num}! (ទាំង Google Calendar)")
         else:
             await update.message.reply_text(f"❌ រកមិនឃើញ #{row_num}")
     except Exception as e:
@@ -1103,9 +1312,7 @@ async def edit_command(update, context):
 async def status_command(update, context):
     try:
         if not context.args:
-            await update.message.reply_text(
-                "❌ ប្រើ: /status <លេខ>\nឧ. `/status 5`", parse_mode="Markdown"
-            )
+            await update.message.reply_text("❌ ប្រើ: /status <លេខ>")
             return
         row_num = context.args[0]
         events = get_all_events()
@@ -1121,8 +1328,8 @@ async def status_command(update, context):
         ]])
         await update.message.reply_text(
             f"📊 #{row_num}: {target['event']}\n"
-            f"ស្ថានភាពបច្ចុប្បន្ន: {target['status']}\n\n"
-            f"ជ្រើសរើសស្ថានភាពថ្មី:",
+            f"ស្ថានភាព: {target['status']}\n\n"
+            f"ជ្រើសរើសថ្មី:",
             reply_markup=kb
         )
     except Exception as e:
@@ -1180,10 +1387,24 @@ async def export_command(update, context):
         await update.message.reply_text(f"❌ {e}")
 
 
+async def sync_command(update, context):
+    """Manual sync ពី Google Calendar"""
+    await update.message.reply_text("🔄 កំពុង sync ពី Google Calendar...")
+    try:
+        loop = asyncio.get_event_loop()
+        added, updated = await loop.run_in_executor(None, sync_from_google_calendar)
+        msg = f"✅ *Sync រួចរាល់*\n\n"
+        msg += f"➕ ថ្មី: *{added}* events\n"
+        msg += f"✏️ កែ: *{updated}* events"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ {e}")
+
+
 async def cancel_command(update, context):
     context.user_data.pop('editing_field', None)
     context.user_data.pop('editing_chat', None)
-    await update.message.reply_text("❌ បោះបង់ការកែ")
+    await update.message.reply_text("❌ បោះបង់")
 
 
 # ══════════════════════════════════════
@@ -1236,7 +1457,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "date": img_data['date'],
             "time": img_data.get('time', ''),
             "event": img_data['event'],
-            "category": "other",
+            "category": detect_category(img_data['event']),
             "is_recurring": False,
             "recurring_day": None,
         }
@@ -1254,7 +1475,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text or text.startswith("/"):
         return
 
-    # Check if user is editing a field
+    # Editing mode
     if 'editing_field' in context.user_data:
         field = context.user_data.pop('editing_field')
         chat_id = context.user_data.pop('editing_chat', None)
@@ -1297,10 +1518,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════
-# 🔔 Reminders
+# Scheduled Jobs
 # ══════════════════════════════════════
 
 async def send_weekly_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Friday 8 AM reminder"""
     logger.info("🔔 Weekly reminder...")
     if not CHAT_ID:
         return
@@ -1319,11 +1541,7 @@ async def send_weekly_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Check events every 30 min:
-    - Event ស្អែក (~24h) → notify
-    - Event ១ ម៉ោងទៀត → notify
-    """
+    """Check events - remind 24h and 1h before"""
     if not CHAT_ID:
         return
     try:
@@ -1346,7 +1564,7 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
 
                 diff_min = (event_dt - now).total_seconds() / 60
 
-                # 24 hours before (± 30 min window)
+                # 24h before (±30 min)
                 if 1410 <= diff_min <= 1470:
                     msg = (f"🔔 *រំលឹក ១ ថ្ងៃមុន*\n\n"
                            f"📅 {e['date']} {e['time']}\n"
@@ -1354,7 +1572,7 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
                            f"🏷 {e['category']}")
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg,
                                                    parse_mode="Markdown")
-                # 1 hour before (± 30 min)
+                # 1h before (±30 min)
                 elif 30 <= diff_min <= 90:
                     msg = (f"⏰ *រំលឹក ១ ម៉ោងមុន*\n\n"
                            f"📅 {e['date']} {e['time']}\n"
@@ -1362,9 +1580,28 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=CHAT_ID, text=msg,
                                                    parse_mode="Markdown")
             except Exception as ex:
-                logger.warning(f"Reminder check error for #{e.get('id')}: {ex}")
+                logger.warning(f"Reminder check #{e.get('id')}: {ex}")
     except Exception as e:
         logger.error(f"Personal reminder error: {e}")
+
+
+async def sync_calendar_job(context: ContextTypes.DEFAULT_TYPE):
+    """Auto pull ពី Google Calendar (រៀងរាល់ ១៥ នាទី)"""
+    try:
+        loop = asyncio.get_event_loop()
+        added, updated = await loop.run_in_executor(None, sync_from_google_calendar)
+
+        if added > 0 and CHAT_ID:
+            msg = f"🔄 *Sync ពី Google Calendar*\n\n"
+            msg += f"➕ ថ្មី: *{added}* events\n"
+            if updated > 0:
+                msg += f"✏️ កែ: *{updated}* events\n"
+            msg += f"\nប្រើ /today ឬ /week ដើម្បីមើល"
+            await context.bot.send_message(
+                chat_id=CHAT_ID, text=msg, parse_mode="Markdown"
+            )
+    except Exception as e:
+        logger.error(f"Sync job error: {e}")
 
 
 # ══════════════════════════════════════
@@ -1376,12 +1613,33 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "🤖 Bot v2.0 is running!"
+    return "🤖 Voice Tracker Bot v3.0 is running!"
 
 
 @flask_app.route("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "3.0"}
+
+
+@flask_app.route("/calendar/<secret>")
+def calendar_feed(secret):
+    """Public .ics feed (for Calendar subscription)"""
+    if secret != CALENDAR_SECRET:
+        return "Unauthorized", 401
+    try:
+        events = get_all_events()
+        ics_data = generate_ics(events)
+        return Response(
+            ics_data,
+            mimetype="text/calendar",
+            headers={
+                "Content-Disposition": "inline; filename=voice_tracker.ics",
+                "Cache-Control": "no-cache, must-revalidate",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Calendar feed error: {e}")
+        return "Error", 500
 
 
 def run_flask():
@@ -1393,7 +1651,7 @@ def run_flask():
 # ══════════════════════════════════════
 
 def run_bot():
-    logger.info("Starting bot v2.0...")
+    logger.info("🚀 Starting Bot v3.0...")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Commands
@@ -1411,6 +1669,7 @@ def run_bot():
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("sort", sort_command))
     app.add_handler(CommandHandler("export", export_command))
+    app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
     # Callbacks
@@ -1423,26 +1682,35 @@ def run_bot():
 
     # Jobs
     job_queue = app.job_queue
+
+    # Weekly reminder (Friday 8 AM)
     reminder_time = dtime(hour=8, minute=0, tzinfo=TZ)
     job_queue.run_daily(
         send_weekly_reminder, time=reminder_time, days=(4,),
         name="weekly_reminder"
     )
-    logger.info("📅 Weekly: Every Friday 8:00 AM")
+    logger.info("📅 Weekly reminder: Friday 8:00 AM")
 
-    # Personal reminders every 30 minutes
+    # Personal reminders every 30 min
     job_queue.run_repeating(
         send_personal_reminders, interval=1800, first=60,
         name="personal_reminders"
     )
     logger.info("⏰ Personal reminders: Every 30 min")
 
-    logger.info("Bot v2.0 is running!")
+    # Google Calendar sync every 15 min
+    job_queue.run_repeating(
+        sync_calendar_job, interval=900, first=30,
+        name="calendar_sync"
+    )
+    logger.info("🔄 Google Calendar sync: Every 15 min")
+
+    logger.info("✅ Bot v3.0 is running!")
     app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    logger.info(f"Flask started on port {PORT}")
+    logger.info(f"🌐 Flask started on port {PORT}")
     run_bot()
