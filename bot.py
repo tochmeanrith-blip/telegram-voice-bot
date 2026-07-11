@@ -2907,8 +2907,7 @@ def run_bot():
  sync_calendar_job, interval=900, first=30,
  name="calendar_sync"
  )
- logger.info("🔄 Google Calendar sync: Every 15 min")
-​​ 
+ logger.info("🔄 Google Calendar sync: Every 15 min") ​​ 
  # 🤖 AI Weekly Summary - Sunday 20:00
  weekly_ai_time = dtime(hour=20, minute=0, tzinfo=TZ)
  job_queue.run_daily(
