@@ -1382,6 +1382,543 @@ def generate_month_calendar_pdf(year=None, month=None):
     return output
 
 # ══════════════════════════════════════
+# 🤖 AI Summary & Insights
+# ══════════════════════════════════════
+
+def generate_weekly_summary_ai(week_start, week_end):
+    """
+    ប្រើ Gemini វិភាគ events សប្តាហ៍មួយ
+    Returns: dict {summary, insights, suggestions}
+    """
+    try:
+        events = get_all_events()
+        
+        # Events in the target week
+        week_events = []
+        for e in events:
+            try:
+                d = datetime.strptime(e['date'], "%Y-%m-%d").date()
+                if week_start <= d <= week_end:
+                    week_events.append(e)
+            except Exception:
+                pass
+        
+        # Events for next week (for suggestions)
+        next_week_start = week_end + timedelta(days=1)
+        next_week_end = next_week_start + timedelta(days=6)
+        next_week_events = []
+        for e in events:
+            try:
+                d = datetime.strptime(e['date'], "%Y-%m-%d").date()
+                if next_week_start <= d <= next_week_end:
+                    next_week_events.append(e)
+            except Exception:
+                pass
+        
+        # Previous week (for comparison)
+        prev_week_start = week_start - timedelta(days=7)
+        prev_week_end = week_start - timedelta(days=1)
+        prev_week_count = sum(1 for e in events
+                              if prev_week_start <= 
+                              datetime.strptime(e['date'], "%Y-%m-%d").date() 
+                              <= prev_week_end)
+        
+        # Prepare data
+        current_week_data = [
+            {
+                "date": e['date'],
+                "time": e['time'],
+                "event": e['event'],
+                "category": e['category'],
+                "status": e['status']
+            }
+            for e in week_events
+        ]
+        
+        next_week_data = [
+            {
+                "date": e['date'],
+                "time": e['time'],
+                "event": e['event'],
+                "category": e['category']
+            }
+            for e in next_week_events
+        ]
+        
+        # Statistics
+        cat_counter = Counter(e['category'] for e in week_events)
+        status_counter = Counter(e['status'] for e in week_events)
+        day_counter = Counter()
+        for e in week_events:
+            try:
+                d = datetime.strptime(e['date'], "%Y-%m-%d")
+                day_counter[WEEKDAY_NAMES[d.weekday()]] += 1
+            except Exception:
+                pass
+        
+        done_count = status_counter.get(STATUS_DONE, 0)
+        pending_count = status_counter.get(STATUS_PENDING, 0)
+        total = len(week_events)
+        completion_rate = (done_count / total * 100) if total > 0 else 0
+        
+        # Growth vs last week
+        if prev_week_count > 0:
+            growth = ((total - prev_week_count) / prev_week_count * 100)
+        else:
+            growth = 0
+        
+        # Busiest day
+        busiest = day_counter.most_common(1)[0] if day_counter else ("N/A", 0)
+        
+        # Build stats dict
+        stats = {
+            "total": total,
+            "prev_total": prev_week_count,
+            "growth": round(growth, 1),
+            "done": done_count,
+            "pending": pending_count,
+            "completion_rate": round(completion_rate, 1),
+            "categories": dict(cat_counter),
+            "busiest_day": busiest[0],
+            "busiest_count": busiest[1],
+            "by_day": dict(day_counter),
+        }
+        
+        # AI Analysis
+        prompt = f"""អ្នកគឺជាជំនួយការ AI សម្រាប់ធ្វើ productivity report ជាភាសាខ្មែរ។
+
+ទិន្នន័យសប្តាហ៍នេះ ({week_start.strftime('%Y-%m-%d')} ដល់ {week_end.strftime('%Y-%m-%d')}):
+
+📊 ស្ថិតិ:
+{json.dumps(stats, ensure_ascii=False, indent=2)}
+
+📝 Events សប្តាហ៍នេះ:
+{json.dumps(current_week_data, ensure_ascii=False, indent=2)}
+
+📅 Events សប្តាហ៍ក្រោយ:
+{json.dumps(next_week_data, ensure_ascii=False, indent=2)}
+
+សូមផ្តល់ការវិភាគជា JSON format:
+{{
+  "highlights": ["ចំណុចលេចធ្លោ 1", "ចំណុចលេចធ្លោ 2", "..."],
+  "achievements": ["សមិទ្ធផល 1", "សមិទ្ធផល 2"],
+  "concerns": ["បញ្ហាដែលគួរយកចិត្តទុកដាក់ 1", "..."],
+  "suggestions": ["ការណែនាំ 1", "ការណែនាំ 2", "ការណែនាំ 3"],
+  "next_week_focus": ["ត្រូវផ្តោត 1", "ត្រូវផ្តោត 2"],
+  "motivation": "សារលើកទឹកចិត្តសម្រាប់សប្តាហ៍ក្រោយ (1-2 ប្រយោគ)"
+}}
+
+ច្បាប់:
+1. ប្រើភាសាខ្មែរធម្មជាតិ ស្និទ្ធស្នាល
+2. ផ្តោតលើទិន្នន័យពិត មិនប្រឌិត
+3. Suggestions ត្រូវជាក់លាក់ អាចធ្វើបាន
+4. Motivation ត្រូវវិជ្ជមាន និងផ្ទាល់ខ្លួន
+5. បើ events តិច - លើកទឹកចិត្តឲ្យសកម្មជាង
+6. បើ events ច្រើន - គោលដៅសម្រាកឲ្យបានគ្រប់គ្រាន់
+
+ឆ្លើយតែ JSON, គ្មានពាក្យបន្ថែម។
+"""
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[prompt],
+        )
+        result = response.text.strip()
+        result = re.sub(r"^```json\s*|\s*```$", "", result).strip()
+        result = re.sub(r"^```\s*|\s*```$", "", result).strip()
+        
+        ai_data = json.loads(result)
+        
+        return {
+            "stats": stats,
+            "ai": ai_data,
+            "week_events": week_events,
+            "next_week_events": next_week_events,
+        }
+    except Exception as e:
+        logger.error(f"AI summary error: {e}")
+        return None
+
+
+def format_weekly_summary_telegram(data, week_start, week_end):
+    """Format summary for Telegram message"""
+    stats = data['stats']
+    ai = data['ai']
+    
+    growth_emoji = "📈" if stats['growth'] >= 0 else "📉"
+    growth_text = f"+{stats['growth']}%" if stats['growth'] >= 0 else f"{stats['growth']}%"
+    
+    msg = f"🤖 *AI Weekly Report*\n"
+    msg += f"📅 {week_start.strftime('%Y-%m-%d')} → {week_end.strftime('%Y-%m-%d')}\n\n"
+    
+    # Overview
+    msg += f"📊 *ទិដ្ឋភាពទូទៅ:*\n"
+    msg += f"   📝 សរុប: *{stats['total']}* events\n"
+    msg += f"   {growth_emoji} បើប្រៀបធៀបសប្តាហ៍មុន: *{growth_text}*\n"
+    msg += f"   ✅ Completion: *{stats['completion_rate']}%* ({stats['done']}/{stats['total']})\n\n"
+    
+    # Busiest day
+    if stats['busiest_count'] > 0:
+        msg += f"🏆 *ថ្ងៃរវល់បំផុត:* {stats['busiest_day']} ({stats['busiest_count']} events)\n\n"
+    
+    # Categories
+    if stats['categories']:
+        msg += f"🏷 *ចែកតាមប្រភេទ:*\n"
+        for cat, count in sorted(stats['categories'].items(), 
+                                  key=lambda x: -x[1]):
+            pct = round(count / stats['total'] * 100) if stats['total'] > 0 else 0
+            msg += f"   {cat}: *{count}* ({pct}%)\n"
+        msg += "\n"
+    
+    # Highlights
+    if ai.get('highlights'):
+        msg += f"✨ *ចំណុចលេចធ្លោ:*\n"
+        for h in ai['highlights'][:3]:
+            msg += f"   • {h}\n"
+        msg += "\n"
+    
+    # Achievements
+    if ai.get('achievements'):
+        msg += f"🏆 *សមិទ្ធផល:*\n"
+        for a in ai['achievements'][:3]:
+            msg += f"   ✓ {a}\n"
+        msg += "\n"
+    
+    # Concerns
+    if ai.get('concerns'):
+        msg += f"⚠️ *ចំណុចត្រូវយកចិត្តទុកដាក់:*\n"
+        for c in ai['concerns'][:3]:
+            msg += f"   ! {c}\n"
+        msg += "\n"
+    
+    # Suggestions
+    if ai.get('suggestions'):
+        msg += f"💡 *ការណែនាំ AI:*\n"
+        for s in ai['suggestions'][:4]:
+            msg += f"   • {s}\n"
+        msg += "\n"
+    
+    # Next week focus
+    if ai.get('next_week_focus'):
+        msg += f"🎯 *គោលដៅសប្តាហ៍ក្រោយ:*\n"
+        for f in ai['next_week_focus'][:3]:
+            msg += f"   ✓ {f}\n"
+        msg += "\n"
+    
+    # Motivation
+    if ai.get('motivation'):
+        msg += f"💪 *លើកទឹកចិត្ត:*\n_{ai['motivation']}_\n\n"
+    
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🤖 _Powered by Gemini AI_"
+    
+    return msg
+
+
+def generate_daily_briefing_ai():
+    """AI briefing សម្រាប់ថ្ងៃនេះ"""
+    try:
+        events = get_all_events()
+        today = datetime.now(TZ).date()
+        today_str = today.strftime("%Y-%m-%d")
+        tomorrow_str = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        today_events = [e for e in events if e['date'] == today_str]
+        tomorrow_events = [e for e in events if e['date'] == tomorrow_str]
+        
+        today_events.sort(key=lambda x: x['time'] or "99:99")
+        
+        if not today_events and not tomorrow_events:
+            return None
+        
+        prompt = f"""អ្នកគឺជាជំនួយការ AI ជាភាសាខ្មែរ។ សូមផ្តល់ daily briefing សម្រាប់ថ្ងៃនេះ។
+
+ថ្ងៃនេះ: {today_str} ({WEEKDAY_NAMES[today.weekday()]})
+
+📅 Events ថ្ងៃនេះ ({len(today_events)}):
+{json.dumps([{"time": e['time'], "event": e['event'], "category": e['category']} for e in today_events], ensure_ascii=False, indent=2)}
+
+📅 Events ថ្ងៃស្អែក ({len(tomorrow_events)}):
+{json.dumps([{"time": e['time'], "event": e['event'], "category": e['category']} for e in tomorrow_events], ensure_ascii=False, indent=2)}
+
+សូមឆ្លើយជា JSON:
+{{
+  "greeting": "ការស្វាគមន៍ ១ ប្រយោគ (ជាភាសាខ្មែរធម្មជាតិ)",
+  "day_overview": "ការវាយតម្លៃថ្ងៃនេះ ១-២ ប្រយោគ (រវល់/ធម្មតា/ស្រួល)",
+  "priority_events": ["Event សំខាន់ 1", "Event សំខាន់ 2"],
+  "tips": ["Tip 1", "Tip 2"],
+  "tomorrow_preview": "សរុបថ្ងៃស្អែក ១ ប្រយោគ (បើមាន)",
+  "quote": "ប្រយោគលើកទឹកចិត្ត"
+}}
+
+ច្បាប់:
+1. ភាសាខ្មែរធម្មជាតិ ស្និទ្ធស្នាល
+2. ជាក់លាក់ចំពោះ events ដែលមាន
+3. Tips ត្រូវផ្តល់ដំបូន្មានពិតៗ
+4. Quote ខ្លី ២-៣ ពាក្យ
+
+ឆ្លើយតែ JSON។
+"""
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[prompt],
+        )
+        result = response.text.strip()
+        result = re.sub(r"^```json\s*|\s*```$", "", result).strip()
+        result = re.sub(r"^```\s*|\s*```$", "", result).strip()
+        
+        ai_data = json.loads(result)
+        
+        return {
+            "ai": ai_data,
+            "today_events": today_events,
+            "tomorrow_events": tomorrow_events,
+            "today": today,
+        }
+    except Exception as e:
+        logger.error(f"Daily briefing error: {e}")
+        return None
+
+
+def format_daily_briefing_telegram(data):
+    """Format briefing for Telegram"""
+    ai = data['ai']
+    today_events = data['today_events']
+    today = data['today']
+    
+    weekday = WEEKDAY_NAMES[today.weekday()]
+    
+    msg = f"🌅 *Daily Briefing*\n"
+    msg += f"📅 {today.strftime('%Y-%m-%d')} • ថ្ងៃ{weekday}\n\n"
+    
+    # Greeting
+    if ai.get('greeting'):
+        msg += f"👋 {ai['greeting']}\n\n"
+    
+    # Overview
+    if ai.get('day_overview'):
+        msg += f"📊 *ថ្ងៃនេះ:*\n_{ai['day_overview']}_\n\n"
+    
+    # Today's events
+    if today_events:
+        msg += f"📌 *កាលវិភាគថ្ងៃនេះ ({len(today_events)}):*\n"
+        for e in today_events:
+            time_str = f"🕐 {e['time']} " if e['time'] else "🕐 --:-- "
+            status_icon = "✅" if STATUS_DONE in e['status'] else "⏳"
+            msg += f"   {status_icon} {time_str}{e['event']}\n"
+        msg += "\n"
+    else:
+        msg += f"📭 គ្មាន events ថ្ងៃនេះទេ - ថ្ងៃទំនេរ!\n\n"
+    
+    # Priority
+    if ai.get('priority_events'):
+        msg += f"🎯 *ចាំបាច់បំផុត:*\n"
+        for p in ai['priority_events'][:3]:
+            msg += f"   ⭐ {p}\n"
+        msg += "\n"
+    
+    # Tips
+    if ai.get('tips'):
+        msg += f"💡 *Tips ថ្ងៃនេះ:*\n"
+        for t in ai['tips'][:3]:
+            msg += f"   • {t}\n"
+        msg += "\n"
+    
+    # Tomorrow
+    if ai.get('tomorrow_preview'):
+        msg += f"🔮 *ថ្ងៃស្អែក:*\n_{ai['tomorrow_preview']}_\n\n"
+    
+    # Quote
+    if ai.get('quote'):
+        msg += f"✨ _{ai['quote']}_\n"
+    
+    return msg
+
+
+def generate_insights_ai():
+    """AI Insights ពី data ទាំងអស់"""
+    try:
+        events = get_all_events()
+        if len(events) < 5:
+            return None
+        
+        # Prepare stats
+        cat_counter = Counter(e['category'] for e in events)
+        status_counter = Counter(e['status'] for e in events)
+        
+        # Monthly breakdown (last 3 months)
+        now = datetime.now(TZ)
+        monthly = defaultdict(int)
+        for e in events:
+            try:
+                d = datetime.strptime(e['date'], "%Y-%m-%d")
+                key = d.strftime("%Y-%m")
+                monthly[key] += 1
+            except Exception:
+                pass
+        
+        # Time patterns
+        time_slots = {"morning": 0, "afternoon": 0, "evening": 0, "night": 0}
+        for e in events:
+            if e['time']:
+                try:
+                    h = int(e['time'].split(":")[0])
+                    if 5 <= h < 12:
+                        time_slots['morning'] += 1
+                    elif 12 <= h < 17:
+                        time_slots['afternoon'] += 1
+                    elif 17 <= h < 21:
+                        time_slots['evening'] += 1
+                    else:
+                        time_slots['night'] += 1
+                except Exception:
+                    pass
+        
+        # Weekday patterns
+        weekday_counter = Counter()
+        for e in events:
+            try:
+                d = datetime.strptime(e['date'], "%Y-%m-%d")
+                weekday_counter[WEEKDAY_NAMES[d.weekday()]] += 1
+            except Exception:
+                pass
+        
+        completion_rate = (status_counter.get(STATUS_DONE, 0) / len(events) * 100) if events else 0
+        
+        data = {
+            "total_events": len(events),
+            "completion_rate": round(completion_rate, 1),
+            "categories": dict(cat_counter),
+            "monthly": dict(sorted(monthly.items())[-6:]),  # Last 6 months
+            "time_slots": time_slots,
+            "weekdays": dict(weekday_counter),
+        }
+        
+        prompt = f"""អ្នកគឺជា AI data analyst ជាភាសាខ្មែរ។ សូមវិភាគ productivity data ខាងក្រោម និងផ្តល់ insights ជ្រាលជ្រៅ។
+
+ទិន្នន័យ:
+{json.dumps(data, ensure_ascii=False, indent=2)}
+
+សូមឆ្លើយជា JSON:
+{{
+  "productivity_score": 85,
+  "productivity_level": "ខ្ពស់/មធ្យម/ទាប",
+  "personality_type": "ប្រភេទបុគ្គលិកលក្ខណៈ (ឧ. 'អ្នកគ្រប់គ្រងពេលវេលា', 'អ្នកចូលចិត្តការងារព្រឹក')",
+  "key_findings": [
+    "រកឃើញ 1",
+    "រកឃើញ 2",
+    "រកឃើញ 3"
+  ],
+  "strengths": ["ចំណុចខ្លាំង 1", "ចំណុចខ្លាំង 2"],
+  "improvements": ["ចំណុចត្រូវកែ 1", "ចំណុចត្រូវកែ 2"],
+  "patterns": [
+    "Pattern ដែលរកឃើញ 1",
+    "Pattern ដែលរកឃើញ 2"
+  ],
+  "recommendations": [
+    "ការណែនាំ 1",
+    "ការណែនាំ 2",
+    "ការណែនាំ 3"
+  ]
+}}
+
+ច្បាប់:
+1. Productivity score: 0-100
+2. ជាក់លាក់ ផ្អែកលើទិន្នន័យ
+3. Pattern គួរបង្ហាញអ្វីមួយ interesting
+4. Recommendations អាចធ្វើបាន
+
+ឆ្លើយតែ JSON។
+"""
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[prompt],
+        )
+        result = response.text.strip()
+        result = re.sub(r"^```json\s*|\s*```$", "", result).strip()
+        result = re.sub(r"^```\s*|\s*```$", "", result).strip()
+        
+        ai_data = json.loads(result)
+        
+        return {
+            "data": data,
+            "ai": ai_data,
+        }
+    except Exception as e:
+        logger.error(f"Insights error: {e}")
+        return None
+
+
+def format_insights_telegram(data):
+    """Format insights for Telegram"""
+    stats = data['data']
+    ai = data['ai']
+    
+    score = ai.get('productivity_score', 0)
+    if score >= 80:
+        score_emoji = "🔥"
+    elif score >= 60:
+        score_emoji = "⭐"
+    elif score >= 40:
+        score_emoji = "💪"
+    else:
+        score_emoji = "🌱"
+    
+    msg = f"🧠 *AI Productivity Insights*\n\n"
+    
+    # Score
+    msg += f"{score_emoji} *Productivity Score:* `{score}/100`\n"
+    msg += f"📊 *កម្រិត:* {ai.get('productivity_level', 'N/A')}\n"
+    msg += f"👤 *ប្រភេទ:* _{ai.get('personality_type', 'N/A')}_\n\n"
+    
+    # Stats
+    msg += f"📈 *ស្ថិតិសរុប:*\n"
+    msg += f"   📝 Events: *{stats['total_events']}*\n"
+    msg += f"   ✅ Completion: *{stats['completion_rate']}%*\n\n"
+    
+    # Key findings
+    if ai.get('key_findings'):
+        msg += f"🔍 *រកឃើញសំខាន់ៗ:*\n"
+        for f in ai['key_findings'][:3]:
+            msg += f"   • {f}\n"
+        msg += "\n"
+    
+    # Strengths
+    if ai.get('strengths'):
+        msg += f"💪 *ចំណុចខ្លាំង:*\n"
+        for s in ai['strengths'][:3]:
+            msg += f"   ✓ {s}\n"
+        msg += "\n"
+    
+    # Improvements
+    if ai.get('improvements'):
+        msg += f"🎯 *ចំណុចត្រូវកែ:*\n"
+        for i in ai['improvements'][:3]:
+            msg += f"   ! {i}\n"
+        msg += "\n"
+    
+    # Patterns
+    if ai.get('patterns'):
+        msg += f"🔬 *Patterns ដែលរកឃើញ:*\n"
+        for p in ai['patterns'][:3]:
+            msg += f"   🔸 {p}\n"
+        msg += "\n"
+    
+    # Recommendations
+    if ai.get('recommendations'):
+        msg += f"💡 *ការណែនាំ:*\n"
+        for r in ai['recommendations'][:4]:
+            msg += f"   → {r}\n"
+        msg += "\n"
+    
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🤖 _Powered by Gemini AI_"
+    
+    return msg
+
+# ══════════════════════════════════════
 # Confirmation UI
 # ══════════════════════════════════════
 
@@ -1591,12 +2128,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/delete <លេខ> - 🗑 លុប\n"
         "/sort - 📶 រៀបតាមកាលបរិច្ឆេទ\n"
         "/sync - 🔄 Sync ពី Google Calendar\n"
-        "/export - 📥 Export .ics\n"
+        "/export - 📥 Export .ics\n\n"
+        "🤖 *AI Features:*\n"
+        "/summary - 📊 AI Weekly Report\n"
+        "/briefing - 🌅 Daily Briefing\n"
+        "/insights - 🧠 AI Insights\n\n"
         "/help - 📖 ជំនួយ\n\n"
         "🔄 *Auto Sync:*\n"
         "_Google Calendar ⇄ Bot រៀងរាល់ ១៥ នាទី_\n\n"
         "🔔 *Reminders:*\n"
-        "_• រៀងរាល់ថ្ងៃសុក្រ ៨:០០ ព្រឹក_\n"
+        "_• ព្រឹករាល់ថ្ងៃ ៧:០០ - Daily Briefing_\n"
+        "_• សុក្រ ៨:០០ - Weekly Calendar PDF_\n"
+        "_• អាទិត្យ ២០:០០ - AI Weekly Summary_\n"
         "_• ១ ថ្ងៃមុន event_\n"
         "_• ១ ម៉ោងមុន event_"
     )
@@ -1936,6 +2479,75 @@ async def cancel_command(update, context):
     context.user_data.pop('editing_chat', None)
     await update.message.reply_text("❌ បោះបង់")
 
+async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """AI Weekly Summary"""
+    await update.message.reply_text("🤖 កំពុងវិភាគសប្តាហ៍ដោយ AI...")
+    try:
+        today = datetime.now(TZ).date()
+        # Last week
+        week_end = today - timedelta(days=today.weekday() + 1)  # Last Sunday
+        week_start = week_end - timedelta(days=6)  # Last Monday
+        
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(
+            None, generate_weekly_summary_ai, week_start, week_end
+        )
+        
+        if not data:
+            await update.message.reply_text("❌ មិនអាចវិភាគបានទេ")
+            return
+        
+        msg = format_weekly_summary_telegram(data, week_start, week_end)
+        
+        if len(msg) > 4000:
+            for i in range(0, len(msg), 4000):
+                await update.message.reply_text(msg[i:i+4000], parse_mode="Markdown")
+        else:
+            await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Summary command error: {e}")
+        await update.message.reply_text(f"❌ {e}")
+
+
+async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """AI Daily Briefing"""
+    await update.message.reply_text("🌅 កំពុងរៀបចំ briefing...")
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, generate_daily_briefing_ai)
+        
+        if not data:
+            await update.message.reply_text("📭 គ្មាន events សម្រាប់ briefing")
+            return
+        
+        msg = format_daily_briefing_telegram(data)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Briefing command error: {e}")
+        await update.message.reply_text(f"❌ {e}")
+
+
+async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """AI Insights ពី data ទាំងអស់"""
+    await update.message.reply_text("🧠 កំពុងវិភាគ insights ជ្រាលជ្រៅ...")
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, generate_insights_ai)
+        
+        if not data:
+            await update.message.reply_text("📭 ត្រូវការ events យ៉ាងតិច ៥ ដើម្បីវិភាគ")
+            return
+        
+        msg = format_insights_telegram(data)
+        
+        if len(msg) > 4000:
+            for i in range(0, len(msg), 4000):
+                await update.message.reply_text(msg[i:i+4000], parse_mode="Markdown")
+        else:
+            await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Insights command error: {e}")
+        await update.message.reply_text(f"❌ {e}")
 
 # ══════════════════════════════════════
 # Message Handlers
@@ -2119,6 +2731,68 @@ async def send_personal_reminders(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Personal reminder error: {e}")
 
+async def send_weekly_ai_summary(context: ContextTypes.DEFAULT_TYPE):
+    """AI Weekly Summary - Sunday 20:00"""
+    logger.info("🤖 Sending AI weekly summary...")
+    if not CHAT_ID:
+        return
+    try:
+        today = datetime.now(TZ).date()
+        # Current week (Mon-Sun)
+        week_start = today - timedelta(days=today.weekday())
+        week_end = week_start + timedelta(days=6)
+        
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(
+            None, generate_weekly_summary_ai, week_start, week_end
+        )
+        
+        if not data:
+            logger.warning("No data for weekly summary")
+            return
+        
+        msg = format_weekly_summary_telegram(data, week_start, week_end)
+        
+        if len(msg) > 4000:
+            for i in range(0, len(msg), 4000):
+                await context.bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=msg[i:i+4000],
+                    parse_mode="Markdown"
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=CHAT_ID,
+                text=msg,
+                parse_mode="Markdown"
+            )
+        logger.info("✅ Weekly AI summary sent!")
+    except Exception as e:
+        logger.error(f"Weekly AI summary error: {e}")
+
+
+async def send_daily_briefing(context: ContextTypes.DEFAULT_TYPE):
+    """Daily Briefing - 07:00 AM"""
+    logger.info("🌅 Sending daily briefing...")
+    if not CHAT_ID:
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, generate_daily_briefing_ai)
+        
+        if not data:
+            logger.info("No events for briefing")
+            return
+        
+        msg = format_daily_briefing_telegram(data)
+        await context.bot.send_message(
+            chat_id=CHAT_ID,
+            text=msg,
+            parse_mode="Markdown"
+        )
+        logger.info("✅ Daily briefing sent!")
+    except Exception as e:
+        logger.error(f"Daily briefing error: {e}")
 
 async def sync_calendar_job(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -2204,6 +2878,9 @@ def run_bot():
     app.add_handler(CommandHandler("export", export_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("summary", summary_command))
+    app.add_handler(CommandHandler("briefing", briefing_command))
+    app.add_handler(CommandHandler("insights", insights_command))
 
     app.add_handler(CallbackQueryHandler(button_handler))
 
@@ -2231,10 +2908,25 @@ def run_bot():
         name="calendar_sync"
     )
     logger.info("🔄 Google Calendar sync: Every 15 min")
+​​    
+    # 🤖 AI Weekly Summary - Sunday 20:00
+    weekly_ai_time = dtime(hour=20, minute=0, tzinfo=TZ)
+    job_queue.run_daily(
+        send_weekly_ai_summary, time=weekly_ai_time, days=(6,),  # Sunday
+        name="weekly_ai_summary"
+    )
+    logger.info("🤖 Weekly AI summary: Sunday 8:00 PM")
+    
+    # 🌅 Daily Briefing - Every morning 07:00
+    briefing_time = dtime(hour=7, minute=0, tzinfo=TZ)
+    job_queue.run_daily(
+        send_daily_briefing, time=briefing_time,
+        name="daily_briefing"
+    )
+    logger.info("🌅 Daily briefing: Every day 7:00 AM")
 
     logger.info("✅ Bot v3.2 is running!")
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
