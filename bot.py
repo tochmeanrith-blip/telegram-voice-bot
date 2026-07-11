@@ -936,24 +936,33 @@ html, body {{
 }}
 
 .event-header {{
-    margin-bottom: 4px;
+    width: 100%;
+    display: table;
+    table-layout: fixed;
+    margin-bottom: 5px;
+    padding-bottom: 3px;
     font-size: 7.5pt;
     font-weight: 700;
-    overflow: hidden;
+    border-bottom: 1px solid rgba(255,255,255,0.25);
 }}
 
 .event-id {{
-    float: left;
+    display: table-cell;
+    text-align: left;
+    vertical-align: middle;
+    width: 50%;
 }}
 
 .event-time {{
-    float: right;
+    display: table-cell;
+    text-align: right;
+    vertical-align: middle;
+    width: 50%;
 }}
 
 .event-text {{
     font-size: 9pt;
-    line-height: 1.35;
-    clear: both;
+    line-height: 1.4;
     word-wrap: break-word;
     overflow-wrap: break-word;
 }}
