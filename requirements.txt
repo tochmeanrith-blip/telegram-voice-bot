@@ -6,4 +6,4 @@ google-api-python-client==2.149.0
 Pillow==11.0.0
 Flask==3.0.3
 pytz==2024.2
-reportlab==4.2.5
+weasyprint==62.3
